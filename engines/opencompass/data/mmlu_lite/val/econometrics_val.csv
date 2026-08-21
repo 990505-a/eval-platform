@@ -1,0 +1,18 @@
+Suppose that a test that the true value of the intercept coefficient is zero results in non-rejection. What would be the appropriate conclusion?,Drop the intercept and re-run the regression,Retain the intercept,Re-compute the test statistic,The regression line is running exactly through the origin,B
+"In order to determine whether to use a fixed effects or random effects model, a researcher conducts a Hausman test. Which of the following statements is false?","For random effects models, the use of OLS would result in consistent but inefficient parameter estimation","If the Hausman test is not satisfied, the random effects model is more appropriate.","Random effects estimation involves the construction of ""quasi-demeaned"" data",Random effects estimation will not be appropriate if the composite error term is correlated with one or more of the explanatory variables in the model,B
+Suppose that observations are available on the monthly bond prices of 100 companies for 5 years. What type of data are these?,Cross-sectional,Time-series,Panel,Qualitative,C
+"An ""ex ante"" forecasting model is one which",Includes only contemporaneous values of variables on the RHS,Includes only contemporaneous and previous values of variables on the RHS,Includes only previous values of variables on the RHS,Includes only contemporaneous values of exogenous variables on the RHS,C
+"If a researcher uses daily data to examine a particular problem and creates a variable that assigns a numerical value of 1 to Monday observations, what term would best describe this type of number?",Continuous,Cardinal,Ordinal,Nominal,D
+"Consider the following MA(3) process
+
+yt = μ + Εt + θ1Εt-1 + θ2Εt-2 + θ3Εt-3 , where σt is a zero mean white noise process with variance σ2.
+
+Which of the following statements are true?
+
+i) The process yt has zero mean
+
+ii) The autocorrelation function will have a zero value at lag 5
+
+iii) The process yt has variance σ2
+
+iv) The autocorrelation function will have a value of one at lag 0",(ii) and (iv) only,(i) and (iii) only,"(i), (ii), and (iii) only","(i), (ii), (iii), and (iv)",A

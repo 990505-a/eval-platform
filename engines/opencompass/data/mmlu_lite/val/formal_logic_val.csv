@@ -1,0 +1,12 @@
+"Identify the antecedent of the following conditional proposition: If the Bees win their first game, then neither the Aardvarks nor the Chipmunks win their first games.",The Aardvarks do not win their first game.,The Bees win their first game.,The Chipmunks do not win their first game.,Neither the Aardvarks nor the Chipmunks win their first games.,B
+" Which of the given formulas of PL is the best symbolization of the following sentence?
+Elliott likes to skateboard or he likes to write songs and to play them.",S ∨ (W • P),(S ∨ W) ∨ P,S • (W ∨ P),(S • W) ∨ P,A
+" Which of the given formulas of PL is the best symbolization of the following sentence?
+A married couple can report their combined income and deduct their combined allowable expenses on one return provided that only one had income or they did not live together all year.",(R • D) ⊃ (I ∨ ~L),(I ∨ ~L) ⊃ (R • D),R • [(I ⊃ D) ∨ ~L],~(I ∨ L) ⊃ (R • D),B
+ Select the best translation into predicate logic.Some robbers steal money from a bank. (Bx: x is a bank; Mx: x is money; Rx: x is a robber; Sxyz: x steals y from z),(∃x){Bx • (∃y)[Ry • (∀z)(Mz ⊃ Syzx)]},(∃x)(∃y)(∃z)[(Rx • By) • (Mz • Syxz)],(∃x){Rx ⊃ (∃y)[My ⊃ (∃z)(Bz ⊃ Sxyz)]},(∃x){Rx • (∃y)[My • (∃z)(Bz • Sxyz)]},D
+" Construct a complete truth table for the following pairs of propositions. Then, using the truth tables, determine whether the statements are logically equivalent or contradictory. If neither, determine whether they are consistent or inconsistent. Justify your answers.
+~[(G ⊃ H) ∨ ~H] and ~G ⊃ G",Logically equivalent,Contradictory,"Neither logically equivalent nor contradictory, but consistent",Inconsistent,D
+" Construct a complete truth table for the following argument. Then, using the truth table, determine whether the argument is valid or invalid. If the argument is invalid, choose an option which presents a counterexample. (There may be other counterexamples as well.)
+D ⊃ (~E ⊃ F)
+~D ⊃ E
+~E / F",Valid,Invalid. Counterexample when D and E are true and F is false,Invalid. Counterexample when D is true and E and F are false,Invalid. Counterexample when E is true and D and F are false,A

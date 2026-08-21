@@ -1,0 +1,6 @@
+id,question,A,B,C,D,answer,explanation
+0,在代数系统中，整环和域的关系是____,整环一定是域,域不一定是整环,域一定是整环,域一定不是整环,C,
+1,下列公式与$\left(\forall x\right)\left(\left(\exists y\right)P\left(y\right)\rightarrow Q\left(x\right)\right)$等值的是____,$(\forall\:x)\:(\exists\:y)\:(\mathsf{P}\:(y)\:\rightarrow\:\mathsf{Q}\:(x)\:)$,$\left(\forall x\right)\left(\forall y\right)\left(\neg\mathsf{P}\left(y\right)\:\rightarrow\:\mathsf{Q}\left(x\right)\right)$,$\left(\forall x\right)\left(\neg\mathtt{Q}\left(x\right)\ \rightarrow\ \left(\forall y\right)\neg\mathtt{P}\left(y\right)\right)$,$\left(\exists y\right)\mathsf{P}\left(y\right)\:\rightarrow\:\left(\:\forall x\right)\mathsf{Q}\left(x\right)$,D,
+2,一个连通图G具有以下____条件时，能一笔画出：即从某结点出发，经过图中每边仅一次回到该结点。,G 没有奇数度结点,G 有一个奇数度结点,G有2个奇数度结点,G没有或有2个奇数度结点,A,
+3,公式$\neg p\rightarrow(q\rightarrow r)$与____等值。,$q\rightarrow(p\lor r)$,$(p\wedge q)\rightarrow r$,$(p\rightarrow r)\lor(q\rightarrow r)$,$p\rightarrow\left(q\lor r\right)$,A,
+4,具有7个结点的所有非同构的树有____个。,7,11,12,14,B,

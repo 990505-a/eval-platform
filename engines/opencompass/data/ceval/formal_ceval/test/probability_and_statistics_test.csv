@@ -1,0 +1,16 @@
+id,question,A,B,C,D,answer,explanation
+0,设$X$服从几何分布，$P(X=1)=0.6$，则$P(X=4\mid X>2)=$____,0.5,0.24,0.36,0.16,B,
+1,"设$X_{1},X_{2},\cdots,X_{3n}$是来自总体$X\sim N\left(0,\sigma^{2}\right)$的一个样本,已知$P\left(a\sum_{i=1}^{n}X_{i}{}^{2}\geq\sum_{i=n+1}^{3n}X_{i}^{2}\right)=0.90$,则$F$的上侧分位数$F_{0.1}(2n,n)$的值为____",$2 / a$,$1 / 2a$,$a / 2$,$2a$,C,
+2,"设连续型随机变量X的概率密度函数为$f(x)=ke^{-{\frac{(x+2)^{2}}{4}}}$,$x\in(-\infty,|+\infty)$，则k=____",$\frac{1}{2\sqrt{2\pi}}$,$\frac{1}{2\sqrt{\pi}}$,$\frac{1}{\sqrt{2\pi}}$,$\frac{1}{4\sqrt{2\pi}}$,B,
+3,"设随机变量X服从指数分布$X\sim e^\lambda$,且方差满足D(X)=4.则P(X>10)=____",e^{-\frac{5}{2}},e^{-5},e^{-20},e^{-40},B,
+4,"设随机变量$X$服从均匀分布$U(-1,1)$,则$Y=e^X$的密度函数为:____","$$
+f_Y(y)=\left\{\begin{array}{cl}
+\frac{1}{2} \ln y+1, & y \in\left(e^{-1}, e^1\right) \\
+0, & \text { 其他 }
+\end{array}\right.
+$$","$$
+f_Y(y)=\left\{\begin{array}{lc}
+\frac{1}{y}, & y \in\left(e^{-1}, e^1\right) \\
+0, & \text { 其他 }
+\end{array}\right.
+$$","$f_Y(y)=\left\{\begin{array}{cl}\frac{1}{2}(\ln y+1), & y \in\left(e^{-1}, e^1\right) \\ 0, & \text { 其他 }\end{array}\right.$","$f_Y(y)=\left\{\begin{array}{cc}\frac{1}{2 y}, & y \in\left(e^{-1}, e^1\right) \\ 0, & \text { 其他 }\end{array}\right.$",D,

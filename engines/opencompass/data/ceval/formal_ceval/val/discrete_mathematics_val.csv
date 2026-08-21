@@ -1,0 +1,6 @@
+id,question,A,B,C,D,answer,explanation
+0,"下列集合中与$\mathbf{\{}1,2\}$不相等的是:____","$\{1,2\}\cup\phi$","$\{1,2\}$","$\{1,2,2\}$",$\{x|\ x\in{\mathcal{R}}\land x^{2}-3x+2=0\}$,B,
+1,令P：天气很冷，Q：老王来了，则命题“虽然天气很冷，但是老王还是来了”可符号化为____,P∧Q,P→Q,P∧﹁Q,P→﹁Q,A,
+2,对于集合A上的二元关系R，若$B\subseteq A$，$C\subseteq A$，$R\uparrow\ B$代表关系R在集合B上受限，则下列是正确的____,$R[B\cap C]=R[B]\cap R[C]$,$R[B]-R[C]=R[B-C]$,$B\subseteq A\Leftrightarrow R[B]\subseteq R[A]$,$R\uparrow(B\cup C)=R\uparrow B\cup R\uparrow C$,D,
+3,下列说法错误的是____,"若简单图每个节点的度大于等于$\frac{n}{2}$,则$G$有$H$回路",简单图$G$存在$H$回路的充要条件是其闭合图存在$H$回路,简单图$G$的任意结点$v_i$，$v_j$之间恒有$d(v_{j})+d(v_{j})\geq n{-}1$， 则$G$存在$H$回路,简单图的闭合图唯一,C,
+4,给定n个结点的一个图，它是一个树的下列说法中，____是不对的。,无回路的连通图,无回路但若增加一条新边就有回路,连通且m=n-1， 其中m是边数，n是结点数,所有结点的度数>2,D,

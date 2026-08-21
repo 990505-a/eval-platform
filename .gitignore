@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.pyc
+.venv*/
+# 前端依赖(实际未用于构建)
+node_modules/
+# 运行产物与本地状态(含真实 API key 的 models.json / .env 在此目录下, 绝不入库)
+runs/
+# 密钥与本地配置
+.env
+module_config.json
+engines/opencompass/data/_hf/
+# opencompass 运行残留
+engines/opencompass/tmp/
+engines/opencompass/icl_inference_output/
+*.pid

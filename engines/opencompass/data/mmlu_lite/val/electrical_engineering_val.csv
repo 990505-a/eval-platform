@@ -1,0 +1,6 @@
+"A 4 pole lap wound dc generator has 4 brushes, if one of the brush is damaged, what will be the change in V, I and P ratings","V, I and P","V/2, I/2 and P/4","V/2, I and P/2","V, I/2 and P/2",D
+No load saturation characteristics are plotted between,no load voltage and field current,no load voltage and armature current,short circuit current and field current,short circuit current and armature current,A
+When checked with an ohm meter an open resistor reads,high but within tolerance.,low but not zero.,zero.,infinite.,D
+Which one of the following is not a vectored interrupt?,TRAP.,RST 7.5.,RST 6.5.,INTR.,D
+"In AC circuits, the connection of measuring instruments cause loading effect errors which may effect",only the magnitude of the quantity being measured.,only phase of the quantity being measured.,both of above.,"magnitude, phase and waveform of the quantity being measured.",D
+"If a circuit consists of two mass elements, two spring elements and four friction elements. Find the order of transfer function?",2,4,6,12,B

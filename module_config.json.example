@@ -1,0 +1,30 @@
+{
+  "rag": {
+    "model": "",
+    "base_url": "",
+    "api_key": "",
+    "judge_model": "",
+    "retrieval": {
+      "top_k": 40,
+      "chunk_top_k": 20,
+      "max_total_tokens": 8000,
+      "enable_rerank": true,
+      "response_type": "Multiple Paragraphs"
+    }
+  },
+  "llm": {
+    "model": "",
+    "base_url": "",
+    "api_key": ""
+  },
+  "agent": {
+    "model": "",
+    "base_url": "",
+    "api_key": ""
+  },
+  "redteam": {
+    "model": "",
+    "base_url": "",
+    "api_key": ""
+  }
+}

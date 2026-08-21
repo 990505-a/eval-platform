@@ -1,0 +1,6 @@
+id,question,A,B,C,D,answer,explanation
+0,求不定积分：$\int{\frac{x^2+1}{x^4+1}}\mathrm{d}x=$____,$\dfrac{\sqrt{3}}{2}\arctan\left(\dfrac{x-\frac{1}{x}}{\sqrt{2}}\right)+C$,$\dfrac{\sqrt{3}}{3}\arctan\left(\dfrac{x-\frac{1}{x}}{\sqrt{3}}\right)+C$,$\dfrac{\sqrt{2}}{2}\arctan\left(\dfrac{x+\frac{1}{x}}{\sqrt{3}}\right)+C$,$\dfrac{\sqrt{2}}{2}\arctan\left(\dfrac{x-\frac{1}{x}}{\sqrt{2}}\right)+C$,D,
+1,求极限：$\lim_{n\rightarrow\infty}\int_0^2{\frac{x^n\ln x}{1+x^n}}\mathrm{d}x$=____,$\ln 2-1$,$2\ln 2-1$,$\ln 2-2$,$\ln 2$,B,
+2,求极限：$\lim_{x\rightarrow\infty}\left(\cos\frac{1}{x}+\sin\frac{1}{x^2}\right)^{x^2}=$____,$\mathrm e^{\frac12}$,$\mathrm e^{\frac23}$,$\mathrm e^{\frac13}$,$\mathrm e^{\frac34}$,A,
+3,求球体$x^2+y^2+z^2\leq R^2$与$x^2+y^2+z^2\leqslant2Rz$所围公共部分的体积____,$\frac{5}{12}\pi R^3$,$\frac{1}{2}\pi R^3$,$\frac{7}{12}\pi R^3$,$\frac{2}{3}\pi R^3$,A,
+4,求极限：$\lim_{x\rightarrow\infty}\left(\frac{x^3}{x^2+1}-\frac{x^2}{x-1}\right)=$____,1,0,-1,$\frac{1}{2}$,C,
