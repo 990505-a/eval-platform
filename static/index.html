@@ -6,6 +6,8 @@
 <title>测评聚合平台</title>
 <script src="/static/vendor/echarts.min.js"></script>
 <script src="/static/vendor/marked.min.js"></script>
+<script src="/static/vendor/xterm.min.js"></script>
+<link rel="stylesheet" href="/static/vendor/xterm.min.css">
 <style>
   :root {
     --bg: #f5f7fa; --card: #fff; --line: #e4e8ef; --txt: #24292f;
@@ -109,6 +111,7 @@
   .formrow { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; font-size: 13px; }
   .formrow label { width: 150px; color: var(--muted); }
   .formrow input { flex: 1; max-width: 420px; }
+  .formrow.tight label { width: auto; white-space: nowrap; margin-right: 2px; }  /* 短标签行: 标签紧贴控件 */
   .mt { margin-top: 14px; }
   /* ---- 测评指南 · 流程图 ---- */
   #p-guide code { background: #f6f8fa; padding: 1px 5px; border-radius: 4px; font-size: 12px; }
@@ -154,7 +157,7 @@
 <main>
 <!-- ═══════════ 总览 ═══════════ -->
 <div id="p-overview" class="page" style="display:none">
-  <div class="pagehead"><h2>仪表盘</h2><span class="ms ok">四引擎聚合</span></div>
+  <div class="pagehead"><h2>仪表盘</h2><span class="ms ok">五引擎聚合</span></div>
 
   <div class="cards" id="engineCards"></div>
 
@@ -199,14 +202,19 @@
     <div class="scroll"><table id="cmpTable"></table></div>
     <details id="rpBox" style="border-top:1px solid var(--line); margin-top:12px; padding-top:10px">
       <summary class="mk" data-mk="ui_params" style="cursor:pointer; font-weight:600; font-size:13px">⚙ 公共检索参数 <span class="hint" id="rpCur">加载中…</span></summary>
-      <div class="hint" style="margin:8px 0">对比维度 = 6 种检索方式（naive/local/global/hybrid/mix/bypass）；下面的参数<b>对所有模式统一生效</b>。
-        改参数后，数据与分数会按参数指纹自动失效，需"重新检索"再评测。</div>
-      <div class="formrow"><label>实体检索量 top_k</label><input type="number" id="rpTopk" style="width:110px" min="1"> <span class="hint">图谱类模式查多少实体</span></div>
-      <div class="formrow"><label>原文块数 chunk_top_k</label><input type="number" id="rpChunk" style="width:110px" min="1"> <span class="hint">所有模式取多少原文块</span></div>
-      <div class="formrow"><label>上下文预算 tokens</label><input type="number" id="rpBudget" style="width:110px" min="500"> <span class="hint">max_total_tokens</span></div>
-      <div class="formrow"><label>重排 rerank</label><input type="checkbox" id="rpRerank"> <span class="hint">检索结果过 bge-reranker 后再生成(需 Rerank 配置)</span></div>
+      <div class="hint" style="margin:8px 0">对比维度随被测 RAG 后端切换；下面的参数<b>对所有模式统一生效</b>。
+        改参数或切换后端后，数据与分数会按参数指纹自动失效，需"重新检索"再评测。</div>
+      <div class="formrow"><label>被测 RAG 后端</label>
+        <select id="rpBackend">
+          <option value="ragflow">RAGFlow (本地·向量/加权/重排 3 模式)</option>
+          <option value="lightrag">LightRAG (知识图谱 5 模式 + bypass)</option>
+        </select>
+        <span class="hint">切换后需重新检索; 两后端的数据可共存同屏对比</span></div>
+      <div class="formrow"><label>原文块数 chunk_top_k</label><input type="number" id="rpChunk" style="width:110px" min="1"> <span class="hint">每个问题取多少原文块(ragflow page_size / lightrag top_k)</span></div>
+      <div class="formrow"><label>相似度阈值 threshold</label><input type="number" id="rpThresh" style="width:110px" step="0.05" min="0" max="1"> <span class="hint">低于此分的块被丢弃(ragflow); 重排模式下按重排分数过滤, 调低可救召回</span></div>
       <div class="formrow"><label>回答风格</label>
-        <select id="rpStyle"><option value="Multiple Paragraphs">多段落(默认)</option><option value="Single Paragraph">单段简答</option></select></div>
+        <select id="rpStyle"><option value="Multiple Paragraphs">多段落(默认)</option><option value="Single Paragraph">单段简答</option></select>
+        <span class="hint">仅 lightrag 后端的答案生成生效</span></div>
       <div class="mt">
         <button onclick="rpSave()">保存参数</button>
         <button class="ghost mk" data-mk="ui_retrieve" style="margin-left:8px" id="rpRetrieveBtn" onclick="retrieveStart()">▶ 重新检索</button>
@@ -257,8 +265,8 @@
     <h3 style="margin:16px 0 8px">AI 合成题集
       <button style="float:right" id="synthBtn" onclick="synthStart()">🤖 从语料合成 10 题</button>
       <span class="hint" id="synthStatus" style="float:right;margin-right:10px"></span></h3>
-    <div class="hint">ragas TestsetGenerator 读取四大名著语料 → 自动生成 问题+标准答案+黄金段落(源自原文, 可反查) →
-      人工审核采纳后进入题库。合成约 3-5 分钟, 按 API 计费(gpt-4o-mini, 约几毛)</div>
+    <div class="hint">从 RAGFlow 索引随机抽真实原文块 → LLM 依据该块出题(问题+标准答案), <b>块本身自动作为黄金段落</b>(来源可反查) →
+      人工审核采纳后进入题库。合成约 1-2 分钟, 按模块配置的模型计费</div>
     <div class="scroll" style="max-height:420px" id="synthList"><span class="hint">暂无待审核题, 点击上方按钮开始合成</span></div>
     <div class="mt" id="synthActions" style="display:none">
       <button onclick="synthAdopt()">✔ 采纳勾选</button>
@@ -293,6 +301,7 @@
   <div class="tabs" id="llmTabs">
     <button data-t="score" class="active" onclick="llmTab('score')">📊 成绩矩阵</button>
     <button data-t="models" onclick="llmTab('models')">🧪 模型管理</button>
+    <button data-t="own" onclick="llmTab('own')" title="维护自己项目的选择题库(bench key: own): 手动添加 / AI 从种子语料合成 → 审核 → 采纳, 成绩进矩阵">🧩 自有题库</button>
     <button data-t="hist" onclick="llmTab('hist')">📜 历史 · 日志</button>
   </div>
 
@@ -372,6 +381,44 @@
 
   <section class="panel"><h3>运行日志</h3><div id="llmLogbox" class="scroll" style="max-height:400px; background:#0d1117; color:#c9d1d9; padding:12px; border-radius:8px; font-family:Consolas,monospace; font-size:12px; white-space:pre-wrap">等待运行…</div></section>
   </div>
+
+  <div id="llm-own" style="display:none">
+  <!-- 自有题库: 开源基准测通用能力, 自有题库测"懂不懂你的业务" -->
+  <section class="panel">
+    <h3>🧩 自有题库 <span class="hint" id="ownCount"></span>
+      <button class="ghost" style="float:right; padding:3px 10px" onclick="ownToggleAdd()">➕ 手动添加</button></h3>
+    <div class="hint">开源基准(C-Eval 等)回答"模型底子如何", <b>自有题库回答"模型懂不懂我的业务"</b>——
+      单选题库落 <code>engines/opencompass/data/own/own.jsonl</code>, 维护后在「成绩矩阵」页选 <b>自有题库</b> 基准即可跑分,
+      与其他基准共用模型登记和成绩矩阵。答案判分用智能提取(同 C-Eval 口径, 兼容思考型模型)。</div>
+    <div id="ownAdd" style="display:none; background:#fafbfc; border:1px solid var(--line); border-radius:8px; padding:12px; margin:10px 0">
+      <div class="formrow"><label>题干</label><input type="text" id="ownQ" style="max-width:560px" placeholder="考察业务事实/规则/细节的单选题, 必须有唯一确定答案"></div>
+      <div class="formrow"><label>选项 A</label><input type="text" id="ownA" style="max-width:360px">
+        <label>选项 B</label><input type="text" id="ownB" style="max-width:360px"></div>
+      <div class="formrow"><label>选项 C</label><input type="text" id="ownC" style="max-width:360px">
+        <label>选项 D</label><input type="text" id="ownD" style="max-width:360px"></div>
+      <div class="formrow"><label>正确答案</label>
+        <select id="ownAns"><option value="A">A</option><option value="B">B</option><option value="C">C</option><option value="D">D</option></select>
+        <button onclick="ownAddSave()">保存到题库</button>
+        <span class="hint">保存后立即生效, 去成绩矩阵页选「自有题库」跑分</span></div>
+    </div>
+    <div class="scroll" style="max-height:360px" id="ownList">加载中…</div>
+  </section>
+
+  <section class="panel">
+    <h3>🤖 AI 合成题目
+      <button id="ownSynthBtn" onclick="ownSynthStart()">从种子语料合成 10 题</button>
+      <span class="hint" id="ownSynthStatus" style="float:right;margin-right:10px"></span></h3>
+    <div class="hint">从种子语料目录 <code>engines/opencompass/data/own_seeds/</code>(放你的业务文档 .txt/.md)
+      随机抽材料块 → LLM 依据材料出选择题, <b>材料原句作为锚(basis)附在待审题里</b> → 人工逐题核对后采纳。
+      换成自己的项目只需替换种子文件。当前种子: <span id="ownSeeds">加载中…</span></div>
+    <div class="scroll" style="max-height:420px" id="ownSynthList"><span class="hint">暂无待审核题, 点击上方按钮开始合成</span></div>
+    <div class="mt" id="ownSynthActions" style="display:none">
+      <button onclick="ownSynthAdopt()">✔ 采纳勾选</button>
+      <button class="ghost" style="margin-left:8px" onclick="ownSynthAdopt(true)">✔ 全部采纳</button>
+      <button class="ghost" style="margin-left:8px" onclick="ownSynthDiscard()">✖ 丢弃勾选/清空</button>
+    </div>
+  </section>
+  </div>
 </div>
 
 <!-- ═══════════ 智能体测评（M3 · deepagents 已接通）═══════════ -->
@@ -379,15 +426,103 @@
   <div class="pagehead"><h2>🤖 智能体测评</h2><span class="ms ok" id="agBadge">deepagents · 检测中…</span>
     <button class="ghost" style="padding:3px 10px; margin-left:4px" onclick="openModuleCfg('agent')">⚙️ 模型设置</button>
     <button id="agStartBtn" style="margin-left:12px" onclick="agentStart()">⚡ 启动服务</button>
+    <button id="agRestartBtn" class="ghost" style="margin-left:4px; padding:3px 10px" title="改完 ⚙️ 模型设置(本地跑)或 .env(Docker 跑)后点此重新加载"
+            onclick="agentRestart()">🔄 重启服务</button>
     <span class="hint" id="agLfuse" style="margin-left:10px"></span></div>
 
   <div class="tabs" id="agTabs">
-    <button data-t="chat" class="active" onclick="agTab('chat')">💬 对话 · 任务</button>
-    <button data-t="eval" onclick="agTab('eval')">📏 指标评测</button>
-    <button data-t="traj" onclick="agTab('traj')">🧭 Langfuse 轨迹</button>
+    <button data-t="tbench" class="active" onclick="agTab('tbench')" title="跑业界基准拿分数, 可对标公开榜">🏁 大考 · 智能体基准</button>
+    <button data-t="chat" onclick="agTab('chat')" title="和智能体聊天/单题试跑, 只体验不评分">💬 体验 · 对话任务</button>
+    <button data-t="eval" onclick="agTab('eval')" title="跑自家任务集, DeepEval 打分">📏 自家打分 · 轨迹质量</button>
+    <button data-t="tasks" onclick="agTab('tasks')" title="维护自家任务集: 手动添加 / AI 合成 → 审核 → 采纳; 「自家打分」测的就是这些任务">🗂 任务集</button>
+    <button data-t="traj" onclick="agTab('traj')" title="回放每一步的调用树, 可抽样评分">🧭 回放 · Langfuse 轨迹</button>
+  </div>
+  <div class="hint" style="margin:8px 2px 10px">本页五页签 = 五件事:<b>🏁 大考</b>(跑业界基准出分, 先看这里) ·
+    <b>💬 体验</b>(随手聊, 不评分) · <b>📏 自家打分</b>(点「🚀 一键评测」全自动出分) ·
+    <b>🗂 任务集</b>(维护/合成自家的考题) · <b>🧭 回放</b>(看智能体每一步做了什么)。</div>
+
+  <div id="ag-tbench">
+  <!-- 线A: 智能体基准矩阵 (Harbor 官方 harness + Terminus-2 榜单同款智能体) -->
+  <section class="panel">
+    <h3>🏁 智能体基准 · 任务完成度
+      <button class="ghost" id="tbStopBtn" style="float:right; padding:3px 10px" disabled title="急刹车: 强停当前跑批(已跑掉的题不退钱, 这轮不出分)。只在有任务运行时可点" onclick="tbStop()">⏹ 停止</button>
+      <button class="ghost" style="float:right; margin-right:8px; padding:3px 10px" onclick="tbRefresh()">↻ 刷新</button>
+      <span class="hint" style="float:right;margin-right:10px" id="tbStatus"></span></h3>
+    <div class="hint">业界智能体基准矩阵:每题在独立 Docker 容器里真实干活,<b>容器内跑测试判分</b>(客观, 不靠裁判)。
+      智能体 = Terminus-2(榜单同款), 被测模型用 <a href="#/llm">LLM 基准页</a>登记的任意端点, 分数可直接对标公开榜。</div>
+
+    <div class="gstep" style="margin-top:12px"><div class="n">1</div><div>
+      <b>验证环境</b>(免费, 换新基准时做一次):官方参考解跑 1 题, 通过说明 Docker/任务镜像没问题
+      <div style="margin-top:6px"><button class="ghost" style="padding:4px 12px" onclick="tbRun(true, 1)"
+        title="用官方参考答案(oracle)免费跑 1 题: 不调你的模型、不花 API 钱, 只验证 Docker 环境和任务镜像能正常工作。换一个新基准后建议先点它">🧪 oracle 预检 1 题(免费)</button>
+        <span class="hint" style="margin-left:8px">oracle = 官方参考答案, 应得满分; 连它都跑 0 分说明环境有问题, 先别烧模型钱</span></div>
+    </div></div>
+
+    <div class="gstep"><div class="n">2</div><div>
+      <b>选基准和模型</b>(模型在 <a href="#/llm">LLM 基准页 → 模型管理</a>登记, 没有就先去加一个):
+      <div class="formrow tight" style="margin-top:6px">
+        <label title="考哪张卷子。每题在独立 Docker 容器里真实干活, 完成后容器内跑测试判分(客观, 不靠裁判)。分数可与公开榜横向对比">基准 <span style="cursor:help">❓</span></label><select id="tbBench" style="max-width:230px" title="下拉换考卷: TB 系=终端实操, τ³=工具对话, GAIA=通用助理, SWE-bench=修真实 GitHub issue(最贵)"><option value="tb21">加载中…</option></select>
+        <label title="进考场的模型(任意 OpenAI 兼容端点, 在 LLM 基准页→模型管理 登记)。它会被装进 Terminus-2 智能体(榜单同款)替它在终端里操作, 分数可与公开榜对比">被测模型 <span style="cursor:help">❓</span></label><select id="tbModel" style="max-width:240px" title="选谁上场考试; 想测新模型先去 LLM 基准页登记"><option>加载中…</option></select>
+        <label title="只考前 N 题(默认 4)。作用=控费控时先冒烟; 注意题少波动大: 4 题时错 1 题就是 25%, 正式对比模型请跑全量或固定同一批题">限题数 <span style="cursor:help">❓</span></label><input type="number" id="tbLimit" value="4" min="1" max="500" style="width:70px" title="这轮最多跑几题。先 2-4 题冒烟, 满意再放全量(TB2.1 共 89 题)">
+        <label title="每题超时 = 题目原生超时 × 此倍数。1×=与公开排行榜同口径(跑线上模型对标用); 2×=本地慢模型推荐(80tok/s 需补偿); 口径记录在每轮 config.json, 不同口径的成绩对比时注意">超时倍数 <span style="cursor:help">❓</span></label><select id="tbTimeout" style="width:70px" title="1×=对齐公开榜(线上模型用); 2×=本地慢模型推荐; 3×=极端宽松"><option value="1">1×</option><option value="2" selected>2×</option><option value="3">3×</option></select>
+        <label title="同时跑几个任务。本地单 GPU 模型(oMLX)必须用 1——两个智能体会互相抢 GPU 饿死(实测一题被饿 7.5 分钟烧穿超时); 云端 API 无此限制, 选 2-4 提速(费用同步×N)">并发数 <span style="cursor:help">❓</span></label><select id="tbConc" style="width:70px" title="本地模型=1(必须); 线上模型可 2-4; 并发=N 时 API 费用也×N"><option value="1" selected>1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option></select>
+        <label title="按任务名挑题(glob 通配符), 留空=不过滤。用途①躲开超时重任务 ②固定同一批题让两个模型的分数可比">任务过滤 <span style="cursor:help">❓</span></label><input type="text" id="tbInclude" placeholder="glob 可选" style="width:110px" title="例: *compressor* 只跑名字带 compressor 的题; 先过滤再取前 N 题">
+      </div>
+      <div class="formrow tight" id="tbCustomRow" style="display:none; margin-top:6px">
+        <label title="自定义数据集: 本地任务目录(Harbor 用 -p 直读)或 registry 名。自建任务四件套: task.yaml/solution.sh/run-tests.sh/tests/, 先 oracle 预检验证可解">自定义 dataset <span style="cursor:help">❓</span></label>
+        <input type="text" id="tbDataset" placeholder="/path/to/任务目录 或 org/dataset" style="min-width:320px"
+               title="本地任务目录自动切 harbor run -p; registry 名走 -d。跑前建议先点 oracle 预检">
+        <span class="hint">本地目录(自动 -p)或 Harbor registry 名(-d)</span>
+      </div>
+    </div></div>
+
+    <div class="gstep"><div class="n">3</div><div>
+      <b>开跑并读分</b>(真实推理, 按 API 计费; 可离开本页, 回来点 ↻ 刷新):
+      <div style="margin-top:6px"><button id="tbRunBtn" style="padding:4px 12px" onclick="tbRun(false)"
+        title="正式开考: 每题起独立容器, 你的模型经 Terminus-2 在里面多轮操作, 完成后容器内跑测试判分。按 API 计费, 本地模型耗时更长">▶ 开始跑基准</button>
+        <span class="hint" style="margin-left:8px">跑完 → 下方出通过率卡片和逐任务明细; 每轮自动进「🕘 历史轮次」, 同一基准换模型跑即可对比</span></div>
+    </div></div>
+
+    <div id="tbLive" style="display:none; margin-top:12px; background:#fafbfc; border:1px solid var(--line); border-radius:8px; padding:12px"></div>
+    <div id="tbDemo" style="display:none; margin-top:12px; border:1px solid var(--line); border-radius:8px; padding:12px">
+      <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap">
+        <b>🎬 实时演示</b>
+        <select id="tbDemoJob" style="max-width:250px" title="选要看哪一轮(默认最新); 新跑一轮后, 旧轮次的录像在这里随时回看"></select>
+        <button class="ghost" id="tbJobDel" style="display:none; padding:3px 10px; color:var(--red)"
+          title="删除当前选中的历史轮次目录(含全部终端录像/轨迹, 不动历史表), 不可恢复" onclick="tbDelJob()">🗑 轮次</button>
+        <button class="ghost" id="tbDemoPlay" style="display:none; padding:3px 10px"
+          title="用回放播放器完整重放当前查看的任务(自动播放, 可调速/暂停/拖动进度条); 直播中的任务会播放到目前已录制的部分" onclick="tbDemoPlay()">▶ 完整回放</button>
+        <select id="tbDemoTask" style="max-width:260px" title="选要观看的任务; 默认自动跟随正在运行的任务"></select>
+        <span class="hint" id="tbDemoState"></span>
+        <span style="flex:1"></span>
+        <button class="ghost" style="padding:3px 10px" onclick="tbViewStart()"
+          title="启动 Harbor 官方 web 轨迹浏览器(浏览 jobs 目录全部轨迹与录像); 首次启动可能要构建前端, 稍慢">🔍 harbor view</button>
+        <a id="tbViewLink" class="hint" style="display:none" target="_blank" rel="noopener"></a>
+      </div>
+      <div style="display:flex; gap:10px; margin-top:8px; flex-wrap:wrap">
+        <div style="flex:2 1 560px; min-width:0">
+          <div class="hint" style="margin-bottom:4px">📺 终端直播 · Terminus-2 在任务容器里实时敲的命令(asciinema 增量流)</div>
+          <div id="tbTerm" style="background:#0d1117; border-radius:6px; padding:6px; overflow:auto"></div>
+        </div>
+        <div style="flex:1 1 340px; min-width:0">
+          <div class="hint" style="margin-bottom:4px">🧠 轨迹步骤 · <span id="tbTok"></span></div>
+          <div id="tbSteps" class="scroll" style="max-height:400px; overflow-y:auto; font-size:11.5px; background:#fafbfc; border:1px solid var(--line); border-radius:6px; padding:8px"></div>
+        </div>
+      </div>
+      <div class="hint" style="margin-top:6px">直播由平台 tail 任务目录里的 recording.cast / trajectory.json 实现, 数据集无关(TB 系/GAIA/SWE-bench 通用); oracle 不录像 · 左侧轮次下拉可回看任意历史轮次 · 完整回放点 chips 的 ▶</div>
+    </div>
+    <div class="cards" id="tbCards" style="display:none; margin-top:12px"></div>
+    <div class="scroll" style="max-height:240px; margin-top:10px"><table id="tbTable"></table></div>
+    <h3 style="margin-top:14px">🕘 历史轮次 <span class="hint">每轮一行 · 基准 × 模型 · 同一基准下对比不同模型通过率</span></h3>
+    <div class="scroll" style="max-height:220px"><table id="tbHistTable"></table></div>
+    <details class="mt" id="tbLogBox"><summary class="hint" style="cursor:pointer">📋 原始日志(排错用 · 含历史轮次的完整命令与报错, 日常看上方实时进度即可)</summary>
+      <div class="scroll" style="max-height:200px; background:#0d1117; color:#c9d1d9; padding:10px; border-radius:8px; font-size:11.5px; white-space:pre-wrap" id="tbLog">点"刷新"查看</div></details>
+  </section>
   </div>
 
-  <div id="ag-chat">
+  <div id="ag-chat" style="display:none">
+  <div class="hint" style="margin-bottom:10px">💡 这页是<b>体验区</b>:左边随便聊(每轮的工具调用显示在回复下方),右边可单题试跑(结果就地显示, <b>不评分</b>)。
+    想看刚才每一步的过程 → 🧭 回放页签;想要分数 → 📏 自家打分页签点「🚀 一键评测」。</div>
   <div class="grid2" style="grid-template-columns: 1.5fr 1fr; align-items:start">
 
     <!-- 左: 对话 -->
@@ -413,7 +548,7 @@
 
       <section class="panel">
         <h3>固定评测任务集</h3>
-        <div class="hint">每题定义了期望工具序列, 运行后自动比对 (ToolCallAccuracy 的基础)</div>
+        <div class="hint">每题定义了期望工具序列与终态期望(文件/记忆), 运行后自动比对 (ToolCorrectness / 召回 / file_hit 的基础)</div>
         <div id="agTasks" class="scroll" style="max-height:420px"><span class="hint">加载中…</span></div>
       </section>
     </div>
@@ -421,15 +556,16 @@
   </div>
 
   <div id="ag-eval" style="display:none">
-  <!-- ragas agent 指标闭环 -->
+  <!-- DeepEval 智能体指标闭环 -->
   <section class="panel">
-    <h3>📏 ragas 智能体指标
-      <button class="ghost" style="float:right; padding:3px 10px" onclick="agGen()">🔄 跑全部任务生成轨迹</button>
-      <button style="float:right; margin-right:8px; padding:3px 10px" onclick="agEval()">▶ 计算指标</button>
-      <button class="ghost" style="float:right; margin-right:8px; padding:3px 10px" onclick="agMetrics()">↻ 刷新</button>
+    <h3>📏 自家打分 · DeepEval 双口径
+      <button class="ghost" style="float:right; padding:3px 10px" onclick="agMetrics()">↻ 刷新</button>
+      <button class="ghost" style="float:right; margin-right:8px; padding:3px 10px" onclick="agEval()">▶ 只算指标(不重跑)</button>
+      <button class="ghost" style="float:right; margin-right:8px; padding:3px 10px" onclick="agGen()">🔄 只生成轨迹</button>
+      <button style="float:right; margin-right:8px; padding:3px 10px" onclick="agOneClick()">🚀 一键评测(推荐)</button>
       <span class="hint" style="float:right;margin-right:10px" id="agmStatus"></span></h3>
-    <div class="hint">ToolCallAccuracy = ragas 严格工具对齐(额外调用判 0) · AgentGoalAccuracy = LLM 目标裁判(二值) ·
-      召回/回答/文件/记忆 = 确定性核验 · 生成轨迹会真实执行 6 个任务(按 API 计费)</div>
+    <div class="hint">给自家智能体(agents/mingzhu-agent)打分:「🚀 一键评测」自动串起 ① 跑全部 6 个任务生成轨迹(真实执行, 按 API 计费, 3-8 分钟)
+      → ② DeepEval 裁判 2 项 + 确定性核验 4 项 → ③ 指标卡/逐题表(行悬浮看裁判理由)/历史轮次。中途可离开本页。</div>
     <div class="cards" id="agmCards" style="display:none"></div>
     <details class="mt" id="agmFilesBox" style="display:none">
       <summary class="hint" style="cursor:pointer" id="agmFilesSum">本地轨迹文件</summary>
@@ -442,13 +578,53 @@
   </div>
 
   <div id="ag-traj" style="display:none">
-  <!-- Langfuse 轨迹 (云端数据, 平台内直接查看) -->
+  <!-- Langfuse 轨迹 (云端/本地数据, 平台内直接查看) + DeepEval 抽样评分闭环 -->
   <section class="panel">
-    <h3>🧭 运行轨迹 (Langfuse 云端 · 平台内查看)
-      <button class="ghost" style="float:right; padding:3px 10px" onclick="loadTraces()">↻ 刷新</button></h3>
-    <div class="hint">智能体每次运行 = 一条轨迹; LLM 调用/工具调用为子层级。数据存 Langfuse 云端, 此处经 API 拉取展示</div>
+    <h3>🧭 运行轨迹 (Langfuse · 平台内查看)
+      <button class="ghost" style="float:right; padding:3px 10px" onclick="loadTraces()">↻ 刷新</button>
+      <button class="ghost" style="float:right; margin-right:8px; padding:3px 10px" onclick="agChatScore()">🔬 对话轨迹抽样评分</button></h3>
+    <div class="hint">智能体每次运行 = 一条轨迹; LLM 调用/工具调用为子层级。「抽样评分」= Langfuse 拉最近对话轨迹 →
+      DeepEval 打分 → 分数写回 Langfuse(轨迹上挂 deepeval-answer-quality)</div>
     <div id="lfTraces" class="scroll" style="max-height:300px"><span class="hint">点击"刷新"加载最近轨迹</span></div>
     <div id="lfTraceDetail" style="display:none; margin-top:12px; background:#fafbfc; border:1px solid var(--line); border-radius:8px; padding:12px; max-height:520px; overflow:auto"></div>
+    <div id="agChatScore" style="display:none; margin-top:12px"></div>
+  </section>
+  </div>
+
+  <div id="ag-tasks" style="display:none">
+  <!-- 任务集管理: agents/mingzhu-agent/tasks.jsonl 在线 CRUD + AI 合成 → 审核采纳 -->
+  <section class="panel">
+    <h3>🗂 当前任务集 <span class="hint" id="tkCount"></span>
+      <button class="ghost" style="float:right; padding:3px 10px" onclick="tkToggleAdd()">➕ 手动添加</button></h3>
+    <div class="hint">任务集 = 「📏 自家打分」的考卷: 每题定义 <b>指令 + 期望(expect_*)</b>——期望工具序列、回答关键词、
+      产出文件、长期记忆关键词, 运行后按这些锚做确定性核验 + 裁判打分。
+      任务落 <code>agents/mingzhu-agent/tasks.jsonl</code>; 改动后如服务未即时感知, 点页头「🔄 重启服务」。</div>
+    <div id="tkAdd" style="display:none; background:#fafbfc; border:1px solid var(--line); border-radius:8px; padding:12px; margin:10px 0">
+      <div class="formrow"><label>指令</label><input type="text" id="tkIns" style="max-width:560px" placeholder="发给智能体的自然语言指令, 如: 检索XX并写成报告"></div>
+      <div class="formrow"><label>期望工具</label><input type="text" id="tkTools" style="max-width:360px" placeholder="逗号分隔, 如: search_classics,write_file">
+        <span class="hint">按必要顺序; 供 tool_recall / ToolCorrectness 判定</span></div>
+      <div class="formrow"><label>回答关键词</label><input type="text" id="tkKws" style="max-width:360px" placeholder="逗号分隔(选填), 如: 桃园,刘备">
+        <span class="hint">answer_hit 判定锚点</span></div>
+      <div class="formrow"><label>期望文件</label><input type="text" id="tkFile" style="max-width:240px" placeholder="如 调查报告.md(选填)">
+        <label>记忆关键词</label><input type="text" id="tkMem" style="max-width:200px" placeholder="选填"></div>
+      <button onclick="tkAddSave()">保存任务</button>
+      <span class="hint" style="margin-left:8px">建议先在「体验」页单题试跑, 确认任务可解再入库</span></div>
+    <div class="scroll" style="max-height:420px" id="tkList">加载中…</div>
+  </section>
+
+  <section class="panel">
+    <h3>🤖 AI 合成任务
+      <button id="tkSynthBtn" onclick="tkSynthStart()">从种子合成 5 个任务</button>
+      <span class="hint" id="tkSynthStatus" style="float:right;margin-right:10px"></span></h3>
+    <div class="hint">合成依据 = 种子文件 <code>engines/deepeval/task_seeds.md</code>(<b>工具清单 + 领域素材</b>, 换你自己的项目改这份)
+      + 现有任务做风格示例 → LLM 生成任务草稿(带 expect_* 标注与审核理由) → 人工逐条审核采纳。
+      合成模型跟随 ⚙️ 设置/agent 模块。<span id="tkSeeds"></span></div>
+    <div class="scroll" style="max-height:440px" id="tkSynthList"><span class="hint">暂无待审核任务, 点击上方按钮开始合成</span></div>
+    <div class="mt" id="tkSynthActions" style="display:none">
+      <button onclick="tkSynthAdopt()">✔ 采纳勾选</button>
+      <button class="ghost" style="margin-left:8px" onclick="tkSynthAdopt(true)">✔ 全部采纳</button>
+      <button class="ghost" style="margin-left:8px" onclick="tkSynthDiscard()">✖ 丢弃勾选/清空</button>
+    </div>
   </section>
   </div>
 </div>
@@ -540,7 +716,7 @@
 
 <!-- ═══════════ 指标词典 ═══════════ -->
 <div id="p-dict" class="page" style="display:none">
-  <div class="pagehead"><h2>📖 指标词典</h2><span class="ms ok">四引擎全指标 · 怎么算/什么概念</span>
+  <div class="pagehead"><h2>📖 指标词典</h2><span class="ms ok">全引擎指标 · 怎么算/什么概念</span>
     <a href="#/guide" class="hint" style="margin-left:auto">先看各模块怎么测 → 🧭 测评指南</a></div>
   <section class="panel">
     <details>
@@ -567,7 +743,7 @@
 
 <!-- ═══════════ 测评指南 ═══════════ -->
 <div id="p-guide" class="page" style="display:none">
-  <div class="pagehead"><h2>🧭 测评指南</h2><span class="ms ok">四大模块 · 测什么 / 怎么跑 / 怎么判分 / 结果在哪</span>
+  <div class="pagehead"><h2>🧭 测评指南</h2><span class="ms ok">五大模块 · 测什么 / 怎么跑 / 怎么判分 / 结果在哪</span>
     <a href="/static/flows.html" target="_blank" class="hint" style="margin-left:auto">📊 流程图（新页面）</a>
     <a href="#/dict" class="hint">指标具体怎么算 → 📖 指标词典</a></div>
 
@@ -583,7 +759,7 @@
   <!-- ── 总览 ── -->
   <section class="panel" id="guide-ov">
     <h3>平台怎么工作 · 一句话：引擎负责测评，平台只做聚合</h3>
-    <div class="hint">平台自身<b>不实现任何指标</b>：测评由四大开源引擎完成（ragas / OpenCompass / Langfuse / promptfoo），
+    <div class="hint">平台自身<b>不实现任何指标</b>：测评由开源引擎完成（ragas / OpenCompass / DeepEval / Langfuse / promptfoo），
       平台负责管数据、拉起任务、汇总结果、归档历史。你在网页点的每个「运行」，背后都是平台拉起一个子进程去跑引擎脚本，
       再读取它落盘的产物文件来展示——改引擎脚本不影响平台，换口径只需看产物。</div>
     <div class="flow">
@@ -611,7 +787,7 @@
       <div class="gbox"><h4>② 裁判语义式（LLM-as-a-Judge）</h4>
         让裁判模型逐句做语义判断，再聚合成 0-1 分。<b>免标注、能评生成质量</b>，但有噪声、花 API 钱、换裁判分数不可比。
         <ul><li>RAG 裁判类 9 项：忠实度 / 相关性 / 上下文精确召回…</li>
-        <li>智能体：tool_call_accuracy / goal_accuracy</li>
+        <li>智能体：tool_correctness / task_completion（DeepEval 裁判）</li>
         <li>红队：按每条用例的 rubric 判 pass/fail</li></ul></div>
     </div>
     <div class="hint mt">分差 &lt;5% 的裁判类分数别当真（裁判有噪声）；两轮之间"裁判模型/参数指纹"任一不同 = 口径变了，分数不具可比性。</div>
@@ -621,7 +797,7 @@
       <tr><th>模块</th><th class="wrap">测什么</th><th class="wrap">考题（数据集/用例）</th><th class="wrap">判分方式</th><th>入口</th></tr>
       <tr><td>📚 RAG 测评</td><td class="wrap">同一套题下，6 种检索方式谁答得好</td><td class="wrap">题集 <code>eval_questions.jsonl</code>（问题+标准答案，可手动/AI 合成）</td><td class="wrap">ragas 18 项（裁判9 / 字面5 / Rubric3 / Embedding1）</td><td><a href="#/rag">RAG 页</a></td></tr>
       <tr><td>🎓 LLM 基准</td><td class="wrap">模型本身的能力底子（与 RAG 无关）</td><td class="wrap">六大基准本地化限题副本（C-Eval/CMMLU/MMLU/BBH/GSM8K/HellaSwag）</td><td class="wrap">accuracy 精确匹配（标注比对）</td><td><a href="#/llm">LLM 基准页</a></td></tr>
-      <tr><td>🤖 智能体测评</td><td class="wrap">多步任务执行 + 工具调用 + 文件副作用</td><td class="wrap">固定任务集 <code>tasks.jsonl</code> 6 题（标注期望工具/产物/关键词）</td><td class="wrap">ragas agent 2 项（裁判）+ 确定性核验 3 项（比对）</td><td><a href="#/agent">智能体页</a></td></tr>
+      <tr><td>🤖 智能体测评</td><td class="wrap">多步任务执行 + 工具调用 + 文件副作用</td><td class="wrap">线B：固定任务集 <code>tasks.jsonl</code> 6 题（期望标注）；线A：基准矩阵已接入（TB 2.0/2.1/Pro · τ³ · GAIA · SWE-bench Verified × Terminus-2）</td><td class="wrap">DeepEval 裁判 2 项 + 确定性核验 4 项（比对）</td><td><a href="#/agent">智能体页</a></td></tr>
       <tr><td>🛡️ 安全红队</td><td class="wrap">注入/越狱/泄露/越权等攻击下防御是否合格</td><td class="wrap">手写攻击用例 <code>cases.json</code> 10 条（含判定 rubric）</td><td class="wrap">裁判按 rubric 判 pass/fail（pass=防御成功）</td><td><a href="#/redteam">红队页</a></td></tr>
       <tr><td>⚖️ A/B 对比</td><td class="wrap">模型间 pairwise 对比</td><td class="wrap" colspan="2">不自建——直接用司南（OpenCompass 排行榜/竞技场），A/B 页是门户指引</td><td><a href="#/ab">A/B 页</a></td></tr>
     </table>
@@ -664,11 +840,11 @@
       <tr><td style="white-space:nowrap"><b>工具调用</b></td>
         <td class="wrap">BFCL（伯克利函数调用榜：选对函数+填对参数+并行嵌套）/ API-Bank</td>
         <td class="wrap">AST 比对 / 执行验证 · 客观</td>
-        <td class="wrap">🟡 <a href="#/agent">M3</a> 的 tool_call_accuracy / tool_recall 是同思路在业务任务集上的落地</td></tr>
+        <td class="wrap">🟡 <a href="#/agent">M3</a> 的 tool_correctness / tool_recall 是同思路在业务任务集上的落地</td></tr>
       <tr><td style="white-space:nowrap"><b>Agent 综合</b></td>
-        <td class="wrap">AgentBench（8 仿真环境）/ GAIA（通用助理）/ τ-bench（客服·终态数据库比对）/ WebArena · OSWorld（网页与 OS 操作）/ TheAgentCompany（模拟公司打工）</td>
+        <td class="wrap">Terminal-Bench 2（终端任务·容器内测试判分）/ SWE-bench（修真实 issue）/ GAIA（通用助理）/ τ-bench（客服·终态数据库比对）/ AgentBench · WebArena · OSWorld · TheAgentCompany</td>
         <td class="wrap"><b>三要素：环境 + 轨迹 + 终态判定</b>（尽量客观规则，裁判兜底）</td>
-        <td class="wrap">✅ <a href="#/agent">M3</a>：同方法论轻量落地（真实工作区 + Langfuse 轨迹 + 文件/记忆终态核验 + ragas 裁判）</td></tr>
+        <td class="wrap">✅ <a href="#/agent">M3 线B</a>轻量落地（真实工作区 + Langfuse 轨迹 + 文件/记忆终态核验 + ragas 裁判）；✅ 线A 基准矩阵已接入（Harbor:TB 2.0/2.1/Pro · τ³ · GAIA · SWE-bench Verified,分数可与公开榜对比）</td></tr>
       <tr><td style="white-space:nowrap"><b>RAG 质量</b></td>
         <td class="wrap">ragas / ARES / Trulens RAG 三元组 / RAGChecker（claim 级）/ DeepEval；公开问答集：Natural Questions / HotpotQA / FreshQA</td>
         <td class="wrap">裁判语义为主 + 字面比对</td>
@@ -787,45 +963,85 @@
   <section class="panel" id="guide-agent" style="display:none">
     <h3>🤖 智能体测评 · 测什么</h3>
     <div class="hint">测智能体<b>"做事"的能力</b>——不是答一段话，而是多步执行：工具调对没有、该产出的文件产了没有、最终目标达成没有。
-      被测对象是 <code>rag-eval/agent</code> 的 deepagents 智能体（工具：corpus_search 语料检索 / book_stats 统计 / write_file / edit_file / rag_query 知识库 / task 子代理）。</div>
+      被测对象是 <code>rag-eval/agent</code> 的 deepagents 智能体（工具：corpus_search 语料检索 / book_stats 统计 / write_file / edit_file / rag_query 知识库 / task 子代理）。<br>
+      <b>看懂所有 Agent 榜单的两条线</b>——<b>线 A · 任务完成度</b>（业界基准口径）：Terminal-Bench 2 / SWE-bench / τ-bench / GAIA 测的都是它，
+      智能体在环境里多步行动，最后<b>在环境内跑确定性测试</b>判分，回答"活干成了没有"，是各家模型榜 Agent 分数的主流口径（<b>本平台已接入 Terminal-Bench 2</b>，见智能体页「🏁 终端基准」页签）；
+      <b>线 B · 轨迹质量</b>（本模块 M3 已落地）：ragas 裁判 + 确定性核验，评"过程做得好不好"。线 A 跑出的轨迹可回流线 B 做二次分析，两个视角互补。</div>
+    <h3 class="mt">线 B · 已落地的评测流程（M3）</h3>
     <div class="flow">
-      <div class="fnode"><b>📄 固定任务集</b><small><code>agent/tasks.jsonl</code> 6 题<br>每题标注期望：expect_tools 工具序列 / expect_file 应产出文件 / expect_answer_contains 关键词 / expect_memory 应写入记忆</small></div><span class="farr">▸</span>
-      <div class="fnode proc"><b>⚙ 智能体逐题执行</b><small><code>main.py --all</code> · 真实调用工具、产生文件副作用<br>（先在智能体页启动服务 :8820）</small></div><span class="farr">▸</span>
-      <div class="fnode out"><b>📦 轨迹</b><small><code>runs/trajectories-*.jsonl</code><br>每题的工具调用序列 + 最终回答<br>配了 Langfuse 时同步上报云端</small></div><span class="farr">▸</span>
-      <div class="fnode proc"><b>⚙ eval_agent.py 双口径评分</b><small>确定性核验 3 项 + ragas 裁判 2 项</small></div><span class="farr">▸</span>
+      <div class="fnode"><b>📄 固定任务集</b><small><code>agents/mingzhu-agent/tasks.jsonl</code> 6 题<br>每题标注期望：expect_tools 工具序列 / expect_file 应产出文件 / expect_answer_contains 关键词 / expect_memory 应写入记忆</small></div><span class="farr">▸</span>
+      <div class="fnode proc"><b>⚙ 智能体逐题执行</b><small><code>run_tasks.py</code> · 真实调用工具、产生文件副作用<br>（先在智能体页启动服务 :8820）</small></div><span class="farr">▸</span>
+      <div class="fnode out"><b>📦 轨迹</b><small><code>runs/agenteval/trajectories-*.jsonl</code><br>每题的工具调用序列 + 最终回答 + 终态证据<br>配了 Langfuse 时同步上报</small></div><span class="farr">▸</span>
+      <div class="fnode proc"><b>⚙ evaluate.py 双口径评分</b><small>确定性核验 4 项 + DeepEval 裁判 2 项</small></div><span class="farr">▸</span>
       <div class="fnode out"><b>📦 分数</b><small><code>agent_scores.json</code> + 每轮归档</small></div><span class="farr">▸</span>
       <div class="fnode ui"><b>🖥 平台展示</b><small>指标卡 / 历史轮次 / Langfuse 轨迹</small></div>
     </div>
-    <div class="hint" style="margin:2px 0 8px"><a href="/static/flows.html#agent" target="_blank">📊 在新页面看高清流程图 →</a></div>
-    <h3 class="mt">怎么判分 · 双口径（为什么指标"少"的答案在这里）</h3>
+    <div class="hint" style="margin:2px 0 8px"><a href="/static/flows.html#agent" target="_blank">📊 在新页面看高清流程图（线B 已落地 · 线A 接入架构）→</a></div>
+    <h3 class="mt">线 B 怎么判分 · 双口径（为什么指标"少"的答案在这里）</h3>
     <div class="ggrid">
       <div class="gbox"><h4>标注比对式（确定性 · 免费 · 可复现）</h4><ul>
         <li><b>tool_recall</b> 工具召回：期望工具被实际调用到的比例（多调不罚，宽松对照）</li>
         <li><b>answer_hit</b>：最终回答是否含期望关键词</li>
         <li><b>file_hit</b>：期望文件是否真的产出在工作区</li></ul></div>
       <div class="gbox"><h4>裁判语义式（ragas · 花 API）</h4><ul>
-        <li><b>tool_call_accuracy</b>：裁判对照"期望工具序列"，判断实际调用的工具与参数是否正确（不严格要求顺序）</li>
-        <li><b>goal_accuracy</b>：裁判对照"期望结果描述"，判断任务目标最终是否达成</li></ul></div>
+        <li><b>tool_correctness</b>：DeepEval 裁判对照"期望工具集合"，判断实际调用的工具是否恰当（漏调/多调不当都扣分，连续 0-1 分）</li>
+        <li><b>task_completion</b>：DeepEval 裁判综合最终回答 + 文件/记忆终态证据，判断任务目标达成度（连续 0-1 分）</li></ul></div>
     </div>
     <div class="hint mt">为什么不像 LLM/RAG 那样有成百上千题：智能体任务<b>绑定本智能体的工具集与四大名著语料</b>，
       每题的期望标注都要对着真实语料逐条校准（例如"贾宝玉在语料中命中 12 处"），没法像 MMLU 那样下载公开数据集直接跑；
       且一次任务 = 多轮×多工具调用，同一题跑两遍轨迹都不一样——分数看趋势，单题小数别当真。</div>
-    <h3 class="mt">怎么跑（三步）</h3>
+    <h3 class="mt">线 B 怎么跑（三步）</h3>
     <div class="gstep"><div class="n">1</div><div><b>启动服务</b>（<a href="#/agent">智能体页</a>）：拉起被测智能体 :8820；配了 Langfuse key 时重启生效，之后轨迹自动上报云端。</div></div>
     <div class="gstep"><div class="n">2</div><div><b>生成轨迹</b>：点「生成轨迹」，智能体跑全部 6 题，产出轨迹文件（多份轨迹按时间保留最新 10 份）。</div></div>
     <div class="gstep"><div class="n">3</div><div><b>运行评分</b>：对最新轨迹打分 → 本页看指标卡与历史轮次；逐步骤细节（每次工具调用的输入/输出/耗时/token）去 Langfuse 轨迹面板查看。</div></div>
+    <h3 class="mt">线 A · 智能体基准矩阵（已接入:TB 2.0/2.1/Pro · τ³-bench · GAIA · SWE-bench Verified,智能体页「🏁 智能体基准」下拉选择）</h3>
+    <div class="hint">智能体基准没法像 C-Eval 那样"把题库装进统一格式"——<b>环境本身是基准的一部分</b>（每题 = Dockerfile + 任务目标 + oracle 参考解 + 容器内测试），
+      所以每家都有自己的官方 harness，平台延续"只做聚合层"：接官方 harness，不重造轮子。架构三层分离，换来<b>换模型不动基准代码、换基准不重写智能体</b>：</div>
+    <div class="flow">
+      <div class="fnode"><b>📄 模型登记</b><small>任意 OpenAI 兼容端点<br>（复用 LLM 基准页的模型管理）</small></div><span class="farr">▸</span>
+      <div class="fnode proc"><b>🧠 通用智能体适配器</b><small>写一次 · 所有基准共用<br>模型 + 终端/工具循环 + Langfuse<br>deepagents 骨架照搬 mingzhu-agent</small></div><span class="farr">▸</span>
+      <div class="fnode proc"><b>⚙ 各基准官方 harness</b><small>每基准一个胶水脚本<br>engines/&lt;bench&gt;/run.py 子进程<br>TB2→Harbor · τ-bench→官方 …</small></div><span class="farr">▸</span>
+      <div class="fnode out"><b>📦 产物 runs/&lt;bench&gt;/</b><small>成绩 + 轨迹 · 标准文件名<br>与 runs/llm/ 同构，零侵入聚合</small></div><span class="farr">▸</span>
+      <div class="fnode ui"><b>🖥 平台展示</b><small>成绩矩阵并列一组列<br>轨迹回流线 B 做质量分析</small></div>
+    </div>
+    <div class="scroll"><table>
+      <tr><th>基准</th><th class="wrap">环境</th><th class="wrap">智能体动作</th><th class="wrap">终态判断（都在环境内 · 客观）</th><th class="wrap">官方 harness</th><th class="wrap">建议顺序</th></tr>
+      <tr><td style="white-space:nowrap"><b>Terminal-Bench 2</b></td>
+        <td class="wrap">每题独立 Docker 容器 + 真实终端</td><td class="wrap">执行 shell 命令（观察→行动循环）</td>
+        <td class="wrap">任务做完后容器内跑测试套件</td><td class="wrap">Harbor（支持 oracle 预检 + 自定义智能体）</td>
+        <td class="wrap">① 最轻 · 89 题 · 先接</td></tr>
+      <tr><td style="white-space:nowrap"><b>τ-bench</b></td>
+        <td class="wrap">模拟用户 + 业务 API</td><td class="wrap">工具调用 + 多轮对话</td>
+        <td class="wrap">数据库终态比对（pass^k）</td><td class="wrap">官方 tau-bench</td>
+        <td class="wrap">② 纯 API 模拟 · 无任务镜像</td></tr>
+      <tr><td style="white-space:nowrap"><b>GAIA</b></td>
+        <td class="wrap">网页 / 文件 / 搜索工具</td><td class="wrap">多步工具调用 + 多跳推理</td>
+        <td class="wrap">答案精确匹配</td><td class="wrap">官方 harness</td>
+        <td class="wrap">③ 通用助理</td></tr>
+      <tr><td style="white-space:nowrap"><b>SWE-bench Verified</b></td>
+        <td class="wrap">GitHub 仓库容器</td><td class="wrap">读代码 + 改代码 + 跑命令</td>
+        <td class="wrap">重跑仓库单测（resolved rate）</td><td class="wrap">官方 swebench</td>
+        <td class="wrap">④ 最贵最重 · 放最后</td></tr>
+    </table></div>
+    <h3 class="mt">接入任何新基准的固定六步</h3>
+    <div class="gstep"><div class="n">1</div><div><b>环境预检（零 API 费用）</b>：装官方 harness，先跑 oracle 参考解，验证任务镜像在本机起得来——Apple Silicon 需确认 arm64 支持，x86 镜像走 Docker 模拟慢且偶发失败。</div></div>
+    <div class="gstep"><div class="n">2</div><div><b>智能体适配</b>：按该 harness 的 agent 接口，把通用智能体适配器套进去（通常实现一个类）；框架、模型配置、Langfuse 上报照搬 mingzhu-agent。</div></div>
+    <div class="gstep"><div class="n">3</div><div><b>小规模冒烟</b>：限任务数先跑通（如 TB2 只跑 4 题），人工看轨迹像不像话——沿用"限题控费"思路。</div></div>
+    <div class="gstep"><div class="n">4</div><div><b>定产物契约</b>：成绩 JSON + 轨迹 JSONL 落 <code>runs/&lt;bench&gt;/</code>，标准文件名约定，平台零侵入读取。</div></div>
+    <div class="gstep"><div class="n">5</div><div><b>平台接入</b>：照抄 <code>/api/llm/run|status|results</code> 三件套（子进程 + pidfile + 日志防重复启动），前端成绩矩阵加一组列。</div></div>
+    <div class="gstep"><div class="n">6</div><div><b>收尾闭环</b>：轨迹挂 Langfuse、回流线 B 跑 ragas agent 指标；把 pass@1 / pass^k / resolved rate 写进指标词典，前端悬浮提示有内容。</div></div>
+    <div class="hint mt">与 LLM 基准"六基准本地化 + 限题控费"完全同构：智能体基准多了"环境"这一层，所以多出第 1 步预检与第 2 步适配器，其余照搬。</div>
     <details class="mt">
       <summary style="cursor:pointer; font-weight:600; font-size:13px">🌐 业界对照 · Agent 测评三要素与标准件（招聘要求里的 AgentBench 是这一类）</summary>
       <div class="hint" style="margin-top:8px">
-        业界 Agent 测评的统一方法论是<b>三要素：环境（仿真/真实）+ 轨迹（多轮交互记录）+ 终态判定（尽量客观规则，LLM 裁判兜底）</b>。标准件代表：<br>
-        ① <b>AgentBench</b>（清华）：8 个容器化仿真环境（操作系统/数据库/网页购物等），docker 起环境，模型按 Thought/Action 格式多轮交互，规则判分。<br>
-        ② <b>BFCL</b>（伯克利函数调用榜）：工具调用专项——选对函数、填对参数、并行嵌套，AST 比对 + 执行验证，纯客观。<br>
-        ③ <b>τ-bench</b>：客服场景，多轮对话 + 工具调用 + 业务策略遵守，终态比对数据库。<br>
-        ④ <b>SWE-bench</b>：修真实 GitHub issue，跑仓库单测判定——Agent coding 最硬指标。<br>
-        ⑤ <b>WebArena / OSWorld</b>：仿真网站 / 真实 OS 的 GUI 操作，终态检查脚本；<b>GAIA</b>：通用助理（检索+工具+多跳），答案精确匹配。<br>
-        本平台 M3 是同一方法论的业务化轻量落地：<b>环境</b>=真实工作区+四大名著语料，<b>轨迹</b>=trajectories + Langfuse，
-        <b>终态判定</b>=file_hit / 记忆写入核验（客观）+ ragas ToolCallAccuracy / AgentGoalAccuracy（裁判兜底）。
-        标准件的优势是分数可横向对比，自建任务集的优势是贴合自己的业务场景——面试时两者能互相印证。
+        业界 Agent 测评的统一方法论是<b>三要素：环境（仿真/真实）+ 轨迹（多轮交互记录）+ 终态判定（尽量客观规则，LLM 裁判兜底）</b>。当前榜单上的代表标准件：<br>
+        ① <b>Terminal-Bench 2</b>（Laude Institute，89 个人工验证的高难度任务）：每题一个独立 Docker 容器，智能体驱动真实终端多轮执行；判分＝任务做完后在<b>容器内跑测试</b>。
+        官方 harness 是 <b>Harbor</b>（<code>harbor run -d terminal-bench/terminal-bench-2</code>），<code>-a oracle</code> 可先零成本验证环境，支持自定义智能体接入——本平台线 A 的首接目标。<br>
+        ② <b>SWE-bench Verified</b>：修真实 GitHub issue，重跑仓库单测判定——Agent coding 最硬也最贵的指标。<br>
+        ③ <b>τ-bench</b>：客服场景，多轮对话 + 工具调用 + 业务策略遵守，终态比对数据库（pass^k 口径防"碰运气过关"）。<br>
+        ④ <b>GAIA</b>：通用助理（检索+工具+多跳），答案精确匹配；<b>AgentBench</b>（清华）：8 个容器化仿真环境，规则判分；<b>WebArena / OSWorld</b>：网页与 OS 的 GUI 操作；<b>BFCL</b>：工具调用专项（AST 比对，纯客观）。<br>
+        本平台两条线的映射：<b>线 B（M3 已落地）</b>＝环境（真实工作区 + 四大名著语料）+ 轨迹（trajectories + Langfuse）+ 终态判定（file_hit / 记忆写入核验（客观）+ DeepEval ToolCorrectness / TaskCompletion（裁判兜底））；
+        <b>线 A（规划）</b>＝按上面的三层架构接入标准件，拿到可与公开榜横向对照的分数。标准件分数可横向对比，自建任务集贴合业务场景——两者互相印证。
       </div>
     </details>
   </section>
@@ -947,6 +1163,31 @@
 </div>
 
 <script>
+/* ================= 全局 fetch 加固 =================
+   本机实测: 用户浏览器对主页面上下文的 fetch POST 会网络级失败(GET 正常, 干净页面正常),
+   疑似插件按页面注入 hook。此壳对所有非 GET 请求在网络级失败时自动用 XHR 通道(独立代码
+   路径, 实测可通)重试一次, 返回标准 Response —— 全部 30+ 处调用点与未来代码零改动受益。 */
+(function () {
+  const nativeFetch = window.fetch.bind(window);
+  window.fetch = function (url, opts) {
+    const method = ((opts && opts.method) || "GET").toUpperCase();
+    return nativeFetch(url, opts).catch(err => {
+      if (method === "GET" || method === "HEAD" || typeof url !== "string") throw err;
+      const hdrs = {};
+      const h = (opts && opts.headers) || {};
+      Object.keys(h).forEach(k => { hdrs[k] = h[k]; });
+      return new Promise((resolve, reject) => {
+        const x = new XMLHttpRequest();
+        x.open(method, url, true);
+        Object.entries(hdrs).forEach(([k, v]) => x.setRequestHeader(k, v));
+        x.onload = () => resolve(new Response(x.responseText || "", {status: x.status, statusText: x.statusText}));
+        x.onerror = () => reject(err);
+        opts && opts.body ? x.send(opts.body) : x.send();
+      });
+    });
+  };
+})();
+
 /* ================= 路由 ================= */
 const pages = ["overview","guide","rag","llm","agent","redteam","ab","dict","settings"];
 function route() {
@@ -955,6 +1196,7 @@ function route() {
   pages.forEach(x => document.getElementById("p-" + x).style.display = x === p ? "" : "none");
   document.querySelectorAll("aside a").forEach(a => a.classList.toggle("on", a.dataset.p === p));
   if (p === "rag") setTimeout(resizeRadar, 0);
+  if (p === "agent") { agentStatus(); tbRefresh(); }   // 默认页签(🏁 大考)的基准/模型下拉与历史加载
 }
 window.addEventListener("hashchange", route);
 
@@ -1066,11 +1308,10 @@ async function rpRefresh() {
   try {
     rpData = await jget("/api/retrieval-params");
     const p = rpData.params;
-    document.getElementById("rpTopk").value = p.top_k;
     document.getElementById("rpChunk").value = p.chunk_top_k;
-    document.getElementById("rpBudget").value = p.max_total_tokens;
-    document.getElementById("rpRerank").checked = p.enable_rerank;
+    document.getElementById("rpThresh").value = p.similarity_threshold;
     document.getElementById("rpStyle").value = p.response_type;
+    if (rpData.backend) document.getElementById("rpBackend").value = rpData.backend;
     const stale = rpData.stale_modes || [];
     document.getElementById("rpCur").innerHTML = stale.length
       ? `<span style="color:#b45309">⚠ ${stale.length} 个模式的数据是旧参数的, 需重新检索 (fp ${rpData.fp})</span>`
@@ -1080,11 +1321,10 @@ async function rpRefresh() {
 
 async function rpSave() {
   const body = {
-    top_k: document.getElementById("rpTopk").value,
     chunk_top_k: document.getElementById("rpChunk").value,
-    max_total_tokens: document.getElementById("rpBudget").value,
-    enable_rerank: document.getElementById("rpRerank").checked,
+    similarity_threshold: document.getElementById("rpThresh").value,
     response_type: document.getElementById("rpStyle").value,
+    backend: document.getElementById("rpBackend").value,
   };
   try {
     const r = await fetch("/api/retrieval-params", { method: "POST", headers: { "Content-Type": "application/json" },
@@ -1098,9 +1338,10 @@ async function rpSave() {
 
 async function retrieveStart() {
   const stale = (rpData && rpData.stale_modes) || [];
+  const be = (rpData && rpData.backend) || "ragflow";
   const msg = stale.length
-    ? `重新检索数据过期的模式: ${stale.join(", ")} ?\n(每题真实调用检索+生成模型, 22题×N模式, 约几分钟-半小时, 按API计费)`
-    : `当前参数下数据都是最新的。\n仍要强制全部重新检索? (6 模式 × 全部题目, 计费)`;
+    ? `重新检索数据过期的模式: ${stale.join(", ")} ?\n(每题真实调用检索+生成模型, 约几分钟-半小时, 按API计费)`
+    : `当前参数下数据都是最新的。\n仍要强制按后端 ${be} 全部重新检索? (按API计费)`;
   if (!confirm(msg)) return;
   try {
     const r = await fetch("/api/retrieve", { method: "POST" });
@@ -1603,7 +1844,7 @@ async function renderDs() {
     <div class="qcard">
       <div class="q">Q${r.id} [${r.book}] ${r.user_input}</div>
       <div class="ref">✔ 标准答案: ${r.reference}</div>
-      <details><summary>模型回答</summary><pre>${r.response || "-"}</pre></details>
+      <details><summary>模型回答</summary><pre>${r.answer || r.response || "-"}</pre></details>
       <details><summary>检索到的上下文 (${(r.retrieved_contexts || []).length} 条)</summary>
         ${(r.retrieved_contexts || []).map(c => `<pre>${c}</pre>`).join("")}</details>
     </div>`).join("") || "暂无数据";
@@ -1690,7 +1931,9 @@ async function qsRefresh() {
         <div class="q" style="font-size:13px">Q${q.id} [${esc(q.book)}] ${esc(q.user_input)}
           <a href="javascript:void(0)" style="float:right; color:var(--red); font-size:12px" onclick="qsDelete(${q.id})">✖ 删除</a></div>
         <div class="ref" style="font-size:12px">✔ ${esc((q.reference || "").slice(0, 110))}${(q.reference||"").length > 110 ? "…" : ""}</div>
-        ${q.reference_contexts ? `<div class="hint">黄金段落 ${q.reference_contexts.length} 段</div>` : `<div class="hint">无黄金段落标注</div>`}
+        ${q.reference_contexts && q.reference_contexts.length
+          ? `<details style="margin-top:4px"><summary class="hint" style="cursor:pointer">黄金段落 ${q.reference_contexts.length} 段 ▸ 点击展开原文</summary>${q.reference_contexts.map(c => `<pre style="white-space:pre-wrap; font-size:12px; background:#f6f8fa; border:1px solid var(--line); border-radius:6px; padding:8px; max-height:200px; overflow:auto">${esc(c)}</pre>`).join("")}</details>`
+          : `<div class="hint">无黄金段落标注</div>`}
       </div>`).join("");
     // 指标依赖
     const all = Object.keys(labels).length ? Object.keys(labels) : qsNeedsRef;
@@ -1736,7 +1979,7 @@ async function synthRefresh() {
           <span>
             <div class="q" style="font-size:13px">[${esc(p.book)}] ${esc(p.user_input)}</div>
             <div class="ref" style="font-size:12px">✔ ${esc((p.reference || "").slice(0, 120))}${(p.reference||"").length > 120 ? "…" : ""}</div>
-            <div class="hint">黄金段落 ${(p.reference_contexts || []).length} 段 · 来源: ${esc(p.synthesizer || "")}</div>
+            <details style="margin-top:4px"><summary class="hint" style="cursor:pointer">黄金段落 ${(p.reference_contexts || []).length} 段 · 来源: ${esc(p.source || "")} ▸ 点击展开原文</summary>${(p.reference_contexts || []).map(c => `<pre style="white-space:pre-wrap; font-size:12px; background:#f6f8fa; border:1px solid var(--line); border-radius:6px; padding:8px; max-height:200px; overflow:auto">${esc(c)}</pre>`).join("")}</details>
             ${(p.reference_contexts || []).length ? `<details><summary style="font-size:12px;color:var(--muted)">查看黄金段落</summary><pre style="font-size:11px">${esc((p.reference_contexts[0] || "").slice(0, 300))}</pre></details>` : ""}
           </span>
         </label>
@@ -1786,6 +2029,20 @@ async function agentStart() {
     agentStatus(); agentFiles(); agentTasks();
   } catch (e) { alert("启动失败: " + e); }
   document.getElementById("agStartBtn").disabled = false;
+}
+
+async function agentRestart() {
+  const btn = document.getElementById("agRestartBtn");
+  btn.disabled = true; btn.textContent = "⏳ 重启中…";
+  try {
+    const r = await fetch("/api/agent/restart", { method: "POST" });
+    if (!r.ok) throw new Error((await r.json()).detail || r.status);
+    let ok = false;
+    for (let i = 0; i < 30 && !ok; i++) { await new Promise(rr => setTimeout(rr, 1500)); try { ok = (await jget("/api/agent/status")).up; } catch(e){} }
+    agentStatus(); agentFiles(); agentTasks();
+    if (!ok) alert("服务 45s 内未上线: 看 agents/mingzhu-agent/server.log(本地)或 docker logs agent-mingzhu");
+  } catch (e) { alert("重启失败: " + e.message); }
+  btn.disabled = false; btn.textContent = "🔄 重启服务";
 }
 
 function agBubble(who, html) {
@@ -1874,21 +2131,400 @@ async function agentRunTask(id) {
   } catch (e) { res.innerHTML = `<span style="color:var(--red)">失败: ${esc(e.message)}</span>`; }
 }
 
-/* ================= M3: 智能体页签 + ragas agent 指标 ================= */
+/* ================= M3: 智能体页签 + DeepEval 指标 ================= */
 function agTab(t) {
   document.querySelectorAll("#agTabs button").forEach(b => b.classList.toggle("active", b.dataset.t === t));
-  ["chat", "eval", "traj"].forEach(x =>
+  ["tbench", "chat", "eval", "tasks", "traj"].forEach(x =>
     document.getElementById("ag-" + x).style.display = x === t ? "" : "none");
+  if (t === "tbench") tbRefresh();
   if (t === "eval") agMetrics();
-  if (t === "traj" && !document.getElementById("lfTraces").dataset.loaded) loadTraces();
+  if (t === "tasks") tkRefresh();
+  if (t === "traj") { loadChatscores(); if (!document.getElementById("lfTraces").dataset.loaded) loadTraces(); }
+}
+
+/* ================= 任务集管理 (tasks.jsonl CRUD + AI 合成 → 审核采纳) ================= */
+function tkToggleAdd() {
+  const b = document.getElementById("tkAdd");
+  b.style.display = b.style.display === "none" ? "" : "none";
+}
+async function tkRefresh() {
+  try {
+    const d = await jget("/api/agent/tasks");
+    const ts = d.tasks || [];
+    document.getElementById("tkCount").textContent = `共 ${ts.length} 个任务`;
+    document.getElementById("tkSeeds").textContent = d.seeds ? "" : "⚠️ 未找到种子文件 task_seeds.md, 无法合成";
+    const anchor = t => [
+      ...(t.expect_answer_contains || []).length ? [`关键词: ${t.expect_answer_contains.join("/")}`] : [],
+      ...(t.expect_file ? [`文件: ${t.expect_file}`] : []),
+      ...(t.expect_memory_contains ? [`记忆: ${t.expect_memory_contains}`] : []),
+    ].join(" · ") || "无终态锚点(仅工具核验)";
+    document.getElementById("tkList").innerHTML = ts.length ? ts.map(t => `
+      <div class="qcard" style="padding:10px 12px">
+        <div class="q" style="font-size:13px">任务${t.id} · ${esc(t.instruction)}
+          <a href="javascript:void(0)" style="float:right; color:var(--red); font-size:12px" onclick="tkDel(${t.id})">✖ 删除</a></div>
+        <div class="hint" style="margin-top:4px">期望工具: ${(t.expect_tools || []).map(x => `<span class="chip on" style="font-size:11px">${esc(x)}</span>`).join(" ")}
+          · ${esc(anchor(t))}</div>
+      </div>`).join("") : `<div class="hint" style="padding:14px">任务集为空 · 手动添加或用下方 AI 合成</div>`;
+  } catch (e) { document.getElementById("tkList").textContent = "加载失败"; }
+  tkSynthRefresh();
+}
+async function tkAddSave() {
+  const split = s => s.split(/[,，]/).map(x => x.trim()).filter(Boolean);
+  const body = {
+    instruction: document.getElementById("tkIns").value.trim(),
+    expect_tools: split(document.getElementById("tkTools").value),
+    expect_answer_contains: split(document.getElementById("tkKws").value),
+    expect_file: document.getElementById("tkFile").value.trim() || undefined,
+    expect_memory_contains: document.getElementById("tkMem").value.trim() || undefined,
+  };
+  if (!body.instruction || !body.expect_tools.length) { alert("指令和期望工具必填(工具名逗号分隔)"); return; }
+  try {
+    const r = await fetch("/api/agent/tasks", { method: "POST",
+      headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.detail || r.status);
+    document.getElementById("tkIns").value = ""; document.getElementById("tkTools").value = "";
+    document.getElementById("tkKws").value = ""; document.getElementById("tkFile").value = "";
+    document.getElementById("tkMem").value = "";
+    tkRefresh();
+  } catch (e) { alert("保存失败: " + e.message); }
+}
+async function tkDel(id) {
+  if (!confirm(`删除任务${id}? (已有的轨迹与分数不受影响)`)) return;
+  try {
+    const r = await fetch(`/api/agent/tasks?id=${id}`, { method: "DELETE" });
+    if (!r.ok) throw new Error(r.status);
+    tkRefresh();
+  } catch (e) { alert("删除失败: " + e); }
+}
+async function tkSynthStart() {
+  if (!confirm("AI 合成 5 个任务? (LLM 按模块配置计费, 约 1 分钟, 完成后逐条人工审核)")) return;
+  try {
+    const r = await fetch("/api/agent/task-synth", { method: "POST",
+      headers: { "Content-Type": "application/json" }, body: JSON.stringify({ size: 5 }) });
+    if (!r.ok) throw new Error((await r.json()).detail || r.status);
+    tkSynthRefresh();
+  } catch (e) { alert("启动失败: " + e.message); }
+}
+async function tkSynthRefresh() {
+  try {
+    const d = await jget("/api/agent/task-synth");
+    const pend = d.pending || [];
+    document.getElementById("tkSynthBtn").disabled = d.running;
+    document.getElementById("tkSynthStatus").textContent = d.running ? "● 合成中…(约 1 分钟)" : "";
+    const box = document.getElementById("tkSynthList"), act = document.getElementById("tkSynthActions");
+    if (!pend.length) {
+      box.innerHTML = d.running
+        ? `<div class="hint" style="padding:18px; text-align:center">● 合成中… 完成后此处显示待审任务</div>`
+        : `<span class="hint">暂无待审核任务, 点击上方按钮开始合成</span>`;
+      act.style.display = "none"; return;
+    }
+    act.style.display = "";
+    box.innerHTML = pend.map(p => `
+      <div class="qcard" style="padding:10px 12px">
+        <label style="display:flex; gap:8px; align-items:flex-start">
+          <input type="checkbox" class="tkSynthCb" value="${p.id}" style="margin-top:3px" checked>
+          <span>
+            <div class="q" style="font-size:13px">${esc(p.instruction)}</div>
+            <div class="hint" style="margin-top:4px">期望工具: ${(p.expect_tools || []).map(x => `<span class="chip on" style="font-size:11px">${esc(x)}</span>`).join(" ")}
+              ${(p.expect_answer_contains || []).length ? ` · 关键词: ${esc((p.expect_answer_contains || []).join("/"))}` : ""}
+              ${p.expect_file ? ` · 文件: ${esc(p.expect_file)}` : ""}
+              ${p.expect_memory_contains ? ` · 记忆: ${esc(p.expect_memory_contains)}` : ""}</div>
+            ${p.rationale ? `<div class="hint" style="margin-top:4px">💡 ${esc(p.rationale)}</div>` : ""}
+          </span>
+        </label>
+      </div>`).join("");
+  } catch (e) {}
+}
+async function tkSynthAdopt(all) {
+  const ids = all ? [] : [...document.querySelectorAll(".tkSynthCb:checked")].map(cb => +cb.value);
+  if (!all && !ids.length) { alert("先勾选要采纳的任务"); return; }
+  if (!confirm(all ? `全部采纳 ${[...document.querySelectorAll(".tkSynthCb")].length} 个任务?` : `采纳 ${ids.length} 个任务?`)) return;
+  try {
+    const r = await fetch("/api/agent/task-synth/adopt", { method: "POST",
+      headers: { "Content-Type": "application/json" }, body: JSON.stringify(all ? {} : { ids }) });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.detail || r.status);
+    alert(`已采纳 ${d.adopted} 个任务, 任务集现有 ${d.total_tasks} 个`);
+    tkRefresh();
+  } catch (e) { alert("采纳失败: " + e.message); }
+}
+async function tkSynthDiscard() {
+  if (!confirm("丢弃所有未采纳的合成任务?")) return;
+  try { await fetch("/api/agent/task-synth/discard", { method: "POST",
+    headers: { "Content-Type": "application/json" }, body: "{}" }); tkSynthRefresh(); }
+  catch (e) { alert("失败: " + e); }
+}
+
+/* ================= M3·线A: 智能体基准矩阵 (Harbor) ================= */
+const TB_BENCH_NAMES = {};  // dataset 全名 → 显示名(渲染历史用)
+async function tbBenches() {
+  const sel = document.getElementById("tbBench");
+  if (sel.dataset.loaded) return;
+  try {
+    const st = await jget("/api/tbench/status");
+    sel.innerHTML = (st.benches || []).map(b => {
+      if (b.key === "custom") {   // 自定义入口: 不占 TB_BENCH_NAMES, 选中时显示 dataset 输入行
+        return `<option value="custom" title="${esc(b.note)}">🧩 自定义数据集…</option>`;
+      }
+      TB_BENCH_NAMES[b.dataset] = `${b.name} · ${b.dim}`;
+      return `<option value="${b.key}" title="${esc(b.note)}">${esc(b.name)} (${b.tasks}题·${esc(b.dim)})</option>`;
+    }).join("") || "<option value='tb21'>Terminal-Bench 2.1</option>";
+    sel.onchange = tbBenchChanged;
+    sel.dataset.loaded = 1;
+    tbBenchChanged();
+  } catch (e) { sel.innerHTML = "<option value='tb21'>Terminal-Bench 2.1</option>"; }
+}
+function tbBenchChanged() {
+  const sel = document.getElementById("tbBench"), row = document.getElementById("tbCustomRow");
+  if (row) row.style.display = (sel.value === "custom") ? "" : "none";
+}
+async function tbModels() {
+  const sel = document.getElementById("tbModel");
+  if (sel.dataset.loaded) return;
+  try {
+    const d = await jget("/api/llm/models");          // {models: [...], tested: [...]}
+    const ms = d.models || [];
+    sel.innerHTML = ms.length ? ms.map(m =>
+      `<option value="${esc(m.model)}">${esc(m.model)}</option>`).join("")
+      : "<option value=''>先去 LLM 基准页登记模型</option>";
+    sel.dataset.loaded = 1;
+  } catch (e) { sel.innerHTML = "<option value=''>加载失败</option>"; }
+}
+/* 主页面专用 POST 双通道: fetch 网络级失败 → XHR 兜底。
+   实测(体检页 netdiag): 用户浏览器从干净页面 fetch/XHR 都能通, 但主页面上下文里
+   fetch POST 会 "Failed to fetch"(GET 不受影响)—— 疑似某插件按页面注入 hook 了
+   fetch。XHR 是另一条代码路径, 可绕开。 */
+function tbXhrPost(url, body) {
+  return new Promise((resolve, reject) => {
+    const x = new XMLHttpRequest();
+    x.open("POST", url);
+    x.setRequestHeader("Content-Type", "application/json");
+    x.onload = () => {
+      let d = {}; try { d = JSON.parse(x.responseText); } catch (e) {}
+      if (x.status >= 200 && x.status < 300) resolve(d);
+      else reject(new Error(d.detail || x.status));
+    };
+    x.onerror = () => reject(new Error("Failed to fetch (XHR通道也失败)"));
+    x.send(JSON.stringify(body));
+  });
+}
+async function tbPostJSON(url, body) {
+  try {
+    const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body) });
+    if (!r.ok) throw new Error((await r.json()).detail || r.status);
+    return await r.json();
+  } catch (e) {
+    if (e.message !== "Failed to fetch") throw e;
+    return await tbXhrPost(url, body);   // fetch 通道被拦 → XHR 通道兜底
+  }
+}
+async function tbRun(oracle, limitOverride) {
+  await Promise.all([tbBenches(), tbModels()]);
+  const bench = document.getElementById("tbBench").value;
+  const model = document.getElementById("tbModel").value;
+  if (!oracle && !model) { alert("先在 LLM 基准页登记一个模型(任意 OpenAI 兼容端点)"); return; }
+  const limit = limitOverride || parseInt(document.getElementById("tbLimit").value) || 4;
+  const include = document.getElementById("tbInclude").value.trim();
+  const timeoutMult = parseFloat((document.getElementById("tbTimeout") || {}).value) || 2;
+  const conc = parseInt((document.getElementById("tbConc") || {}).value) || 1;
+  const dataset = bench === "custom" ? (document.getElementById("tbDataset").value.trim() || "") : undefined;
+  if (bench === "custom" && !dataset) { alert("自定义基准需填 dataset(本地任务目录或 Harbor registry 名)"); return; }
+  if (!oracle && !confirm(`跑 ${limit} 题(超时${timeoutMult}× · 并发${conc}), 真实推理按 API 计费(每题多轮交互, 可能要几十分钟), 继续?`)) return;
+  // 双通道 + 预热 + 重试: fetch(可自动重试的GET预热) → 失败走XHR → 再失败隔秒重试
+  const start = async () => {
+    try { await fetch("/api/tbench/status").catch(() => {}); } catch (e) {}
+    return tbPostJSON("/api/tbench/run",
+      { bench, dataset, model, limit, include: include || undefined, oracle, timeout_mult: timeoutMult, concurrency: conc });
+  };
+  try {
+    let lastErr;
+    for (let i = 0; i < 3; i++) {
+      try { await start(); lastErr = null; break; }
+      catch (e) { lastErr = e; await new Promise(res => setTimeout(res, [1000, 3000][i] || 6000)); }
+    }
+    if (lastErr) throw lastErr;
+    tbRefresh(true);
+  } catch (e) { alert("启动失败: " + e.message); }
+}
+async function tbStop() {
+  const btn = document.getElementById("tbStopBtn");
+  if (btn) { btn.disabled = true; btn.textContent = "⏳ 停止中…"; }
+  try {
+    const r = await fetch("/api/tbench/stop", { method: "POST" });
+    if (!r.ok) throw new Error((await r.json()).detail || r.status);
+    st.textContent = ""; // tbRefresh 会接管状态
+    await new Promise(rr => setTimeout(rr, 2000));
+  } catch (e) { alert("停止失败: " + e.message); }
+  if (btn) { btn.textContent = "⏹ 停止"; }
+  tbRefresh();
+}
+async function tbRefresh(poll) {
+  await Promise.all([tbBenches(), tbModels()]);
+  const st = document.getElementById("tbStatus");
+  try {
+    const s = await jget("/api/tbench/status");
+    const r = await jget("/api/tbench/results");
+    st.textContent = (s.running ? "● 运行中…(harbor 逐题跑, 看日志)" : (s.harbor ? "" : "harbor 未安装"));
+    const stopBtn = document.getElementById("tbStopBtn"), runBtn = document.getElementById("tbRunBtn");
+    if (stopBtn) stopBtn.disabled = !s.running;
+    if (runBtn) runBtn.disabled = s.running;
+    // 轮询由文件底部 pageTick 统一调度(5s): 运行中/跑完后都自动刷新, 无需这里自轮询
+    tbLiveProgress();   // 进度 chips(含 ▶ 回放)常驻: 跑完也能回看/回放最近一轮
+    const cards = document.getElementById("tbCards"), table = document.getElementById("tbTable");
+    if (!r.exists) {
+      cards.style.display = "none";
+      table.innerHTML = `<tr><td><div class="ph" style="padding:14px"><small>${s.harbor ? "尚无成绩 · 选基准点「oracle 预检」先免费验证环境" : "未装 harbor: python -m venv .venv-tbench && .venv-tbench/bin/pip install harbor"}</small></div></td></tr>`;
+    } else {
+      const card = (k, v, h) => `<div class="card"><div class="k">${k}</div><div class="v">${v == null ? "-" : v}</div><div class="sub">${h}</div></div>`;
+      cards.style.display = "";
+      cards.innerHTML =
+        (s.running ? `<div class="hint" style="width:100%; color:var(--orange)">⏳ 本轮进行中 · 以下为<b>上一轮</b>成绩, 本轮跑完后自动刷新</div>` : "") +
+        card("通过率", r.pass_rate == null ? "-" : (r.pass_rate * 100).toFixed(0) + "%", `${r.passed}/${r.n} 题`) +
+        card("基准", `<span style="font-size:14px">${esc(TB_BENCH_NAMES[r.bench] || r.bench || "")}</span>`, "容器内测试判分 · 客观") +
+        card("被测模型", `<span style="font-size:14px">${esc(r.model || "")}</span>`, `agent ${esc(r.agent || "-")}`) +
+        card("时间", `<span style="font-size:14px">${esc((r.ts || "").slice(5, 16))}</span>`, `限题 ${r.n} · ${esc((r.job || "").slice(0, 20))}`);
+      table.innerHTML = `<tr><th>任务</th><th>结果</th><th>reward</th></tr>` +
+        (r.tasks || []).map(t => `<tr><td class="wrap">${esc(t.task)}</td>
+          <td>${t.passed ? "<span style='color:var(--green)'>✓ 通过</span>" : "<span style='color:var(--red)'>✗ 未过</span>"}</td>
+          <td>${t.reward == null ? "-" : t.reward}</td></tr>`).join("");
+      if (r.error) { table.innerHTML += `<tr><td colspan="3" class="hint" style="color:var(--red)">${esc(r.error)}</td></tr>`;
+        const lb = document.getElementById("tbLogBox"); if (lb) lb.open = true; }
+    }
+  } catch (e) { st.textContent = "加载失败"; }
+  try {  // 历史轮次
+    const h = await jget("/api/tbench/history");
+    document.getElementById("tbHistTable").innerHTML = `<tr><th>时间</th><th>基准</th><th>模型</th><th>通过率</th><th>agent</th><th>操作</th></tr>` +
+      (h.items || []).map(x => `<tr>
+        <td style="white-space:nowrap">${esc((x.ts || "").slice(5, 16))}</td>
+        <td class="wrap">${esc(TB_BENCH_NAMES[x.bench] || x.bench || "-")}</td>
+        <td class="wrap">${esc(x.model || "-")}</td>
+        <td>${x.pass_rate == null ? "-" : `<span class="sc ${x.pass_rate >= 0.7 ? "g" : x.pass_rate >= 0.4 ? "o" : "r"}">${(x.pass_rate * 100).toFixed(0)}%</span>`} <span class="hint">(${x.passed}/${x.n})</span></td>
+        <td style="font-size:12px">${esc(x.agent || "-")}</td>
+        <td style="white-space:nowrap">${x.job ? `<button class="ghost" style="padding:0 8px" title="在演示面板回看该轮的终端录像与轨迹" onclick="tbPickJob('${esc(x.job)}')">🎬</button> ` : ""}<button class="ghost" style="padding:0 8px; color:var(--red)" title="删除该轮历史及其任务目录(录像/轨迹/归档), 不可恢复" onclick="tbDelHist('${esc(x.ts)}')">🗑</button></td></tr>`).join("") ||
+      `<tr><td colspan="5" class="hint">暂无历史</td></tr>`;
+  } catch (e) {}
+  try {
+    const lg = await jget("/api/tbench/log?n=25");
+    document.getElementById("tbLog").textContent = (lg.lines || []).join("\n") || "(空)";
+  } catch (e) {}
 }
 
 /* ================= 页签: LLM 基准 / 红队 ================= */
 function llmTab(t) {
   document.querySelectorAll("#llmTabs button").forEach(b => b.classList.toggle("active", b.dataset.t === t));
-  ["score", "models", "hist"].forEach(x =>
+  ["score", "models", "hist", "own"].forEach(x =>
     document.getElementById("llm-" + x).style.display = x === t ? "" : "none");
   if (t === "hist") llmHistoryRefresh();
+  if (t === "own") ownQsRefresh();
+}
+
+/* ================= 自有题库 (own bench): 题库 CRUD + AI 合成 → 审核采纳 ================= */
+function ownToggleAdd() {
+  const b = document.getElementById("ownAdd");
+  b.style.display = b.style.display === "none" ? "" : "none";
+}
+async function ownQsRefresh() {
+  try {
+    const d = await jget("/api/llm/bench-questions");
+    const qs = d.questions || [];
+    document.getElementById("ownCount").textContent = `共 ${qs.length} 题 · bench key: own`;
+    document.getElementById("ownSeeds").textContent =
+      (d.seeds || []).length ? (d.seeds || []).join("、") : "⚠️ 目录为空, 合成前请先放业务文档(.txt/.md)";
+    document.getElementById("ownList").innerHTML = qs.length ? qs.map(q => `
+      <div class="qcard" style="padding:10px 12px">
+        <div class="q" style="font-size:13px">Q${q.id} ${esc(q.question)}
+          <a href="javascript:void(0)" style="float:right; color:var(--red); font-size:12px" onclick="ownDel(${q.id})">✖ 删除</a></div>
+        <div class="hint" style="font-size:12px; margin-top:4px">
+          ${["A", "B", "C", "D"].map(c => `<span class="chip${q.answer === c ? " on" : ""}" style="font-size:11px; margin-right:6px">${c}. ${esc(q[c])}</span>`).join("")}
+        </div>
+      </div>`).join("") : `<div class="hint" style="padding:14px">题库为空 · 手动添加或用下方 AI 合成, 攒够题后去「成绩矩阵」页选「自有题库」跑分</div>`;
+  } catch (e) { document.getElementById("ownList").textContent = "加载失败"; }
+  ownSynthRefresh();
+}
+async function ownAddSave() {
+  const body = {
+    question: document.getElementById("ownQ").value.trim(),
+    A: document.getElementById("ownA").value.trim(), B: document.getElementById("ownB").value.trim(),
+    C: document.getElementById("ownC").value.trim(), D: document.getElementById("ownD").value.trim(),
+    answer: document.getElementById("ownAns").value,
+  };
+  if (!body.question || !body.A || !body.B || !body.C || !body.D) { alert("题干和四个选项都必填"); return; }
+  try {
+    const r = await fetch("/api/llm/bench-questions", { method: "POST",
+      headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.detail || r.status);
+    ["ownQ", "ownA", "ownB", "ownC", "ownD"].forEach(id => document.getElementById(id).value = "");
+    ownQsRefresh();
+  } catch (e) { alert("添加失败: " + e.message); }
+}
+async function ownDel(id) {
+  if (!confirm(`删除 Q${id}?`)) return;
+  try {
+    const r = await fetch(`/api/llm/bench-questions?id=${id}`, { method: "DELETE" });
+    if (!r.ok) throw new Error(r.status);
+    ownQsRefresh();
+  } catch (e) { alert("删除失败: " + e); }
+}
+async function ownSynthStart() {
+  if (!confirm("从种子语料合成 10 题? (LLM 按模块配置计费, 约 1-2 分钟, 完成后逐题人工审核)")) return;
+  try {
+    const r = await fetch("/api/llm/synth-bench", { method: "POST",
+      headers: { "Content-Type": "application/json" }, body: JSON.stringify({ size: 10 }) });
+    if (!r.ok) throw new Error((await r.json()).detail || r.status);
+    ownSynthRefresh();
+  } catch (e) { alert("启动失败: " + e.message); }
+}
+async function ownSynthRefresh() {
+  try {
+    const d = await jget("/api/llm/synth-bench");
+    const pend = d.pending || [];
+    document.getElementById("ownSynthBtn").disabled = d.running;
+    document.getElementById("ownSynthStatus").textContent = d.running ? "● 合成中…(约 1-2 分钟)" : "";
+    const box = document.getElementById("ownSynthList"), act = document.getElementById("ownSynthActions");
+    if (!pend.length) {
+      box.innerHTML = d.running
+        ? `<div class="hint" style="padding:18px; text-align:center">● 合成中… 完成后此处显示待审题</div>`
+        : `<span class="hint">暂无待审核题, 点击上方按钮开始合成</span>`;
+      act.style.display = "none"; return;
+    }
+    act.style.display = "";
+    box.innerHTML = pend.map(p => `
+      <div class="qcard" style="padding:10px 12px">
+        <label style="display:flex; gap:8px; align-items:flex-start">
+          <input type="checkbox" class="ownSynthCb" value="${p.id}" style="margin-top:3px" checked>
+          <span>
+            <div class="q" style="font-size:13px">${esc(p.question)}</div>
+            <div class="hint" style="font-size:12px; margin-top:4px">
+              ${["A", "B", "C", "D"].map(c => `<span class="chip${p.answer === c ? " on" : ""}" style="font-size:11px; margin-right:6px">${c}. ${esc(p[c])}</span>`).join("")}
+            </div>
+            <div class="hint" style="margin-top:4px">✔ 依据: ${esc((p.basis || "").slice(0, 120))} · 来源: ${esc(p.source || "")}</div>
+          </span>
+        </label>
+      </div>`).join("");
+  } catch (e) {}
+}
+async function ownSynthAdopt(all) {
+  const ids = all ? [] : [...document.querySelectorAll(".ownSynthCb:checked")].map(cb => +cb.value);
+  if (!all && !ids.length) { alert("先勾选要采纳的题"); return; }
+  if (!confirm(all ? `全部采纳 ${((pendingown()) || []).length} 题?` : `采纳 ${ids.length} 题?`)) return;
+  try {
+    const r = await fetch("/api/llm/synth-bench/adopt", { method: "POST",
+      headers: { "Content-Type": "application/json" }, body: JSON.stringify(all ? {} : { ids }) });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.detail || r.status);
+    alert(`已采纳 ${d.adopted} 题, 题库现有 ${d.total_questions} 题`);
+    ownQsRefresh();
+  } catch (e) { alert("采纳失败: " + e.message); }
+}
+function pendingown() { return [...document.querySelectorAll(".ownSynthCb")].map(cb => +cb.value); }
+async function ownSynthDiscard() {
+  if (!confirm("丢弃所有未采纳的合成题?")) return;
+  try { await fetch("/api/llm/synth-bench/discard", { method: "POST",
+    headers: { "Content-Type": "application/json" }, body: "{}" }); ownSynthRefresh(); }
+  catch (e) { alert("失败: " + e); }
 }
 
 function rtTab(t) {
@@ -1931,8 +2567,8 @@ async function agMetrics() {
       <div class="v">${v == null ? "-" : v}</div><div class="sub">${hint}</div></div>`;
     cards.style.display = "";
     cards.innerHTML =
-      card(mTip("tool_call_accuracy", "ToolCallAccuracy"), fmt(S.tool_call_accuracy), "ragas 严格对齐 · " + (s.n || 0) + " 任务") +
-      card(mTip("goal_accuracy", "AgentGoalAccuracy"), fmt(S.goal_accuracy), "LLM 裁判 · 二值") +
+      card(mTip("tool_correctness", "ToolCorrectness"), fmt(S.tool_correctness), "DeepEval 裁判 · " + (s.n || 0) + " 任务") +
+      card(mTip("task_completion", "TaskCompletion"), fmt(S.task_completion), "DeepEval 裁判 · 0-1") +
       card(mTip("tool_recall", "工具召回"), fmt(S.tool_recall), "宽松 · 多调不罚") +
       card(mTip("answer_hit", "回答命中"), fmt(S.answer_hit), "关键词核验") +
       card(mTip("file_hit", "文件/记忆"), `${fmt(S.file_hit)} / ${fmt(S.memory_hit)}`, "确定性核验") +
@@ -1941,13 +2577,14 @@ async function agMetrics() {
       : (v ? "<span style='color:var(--green)'>✓</span>" : "<span style='color:var(--red)'>✗</span>");
     const chip = v => v == null ? "-" :
       `<span class="sc ${v >= 0.7 ? "g" : v >= 0.4 ? "o" : "r"}" style="min-width:36px">${v}</span>`;
-    table.innerHTML = `<tr><th>#</th><th class="wrap">工具 (实际)</th><th>期望</th><th>${mTip("tool_call_accuracy", "TCA")}</th><th>${mTip("goal_accuracy", "Goal")}</th><th>${mTip("tool_recall", "召回")}</th><th>核验 a/f/m</th></tr>` +
-      (s.per_task || []).map(r => `<tr title="${esc(r.instruction)} (${r.latency_s}s)">
+    table.innerHTML = `<tr><th>#</th><th class="wrap">工具 (实际)</th><th>期望</th><th>${mTip("tool_correctness", "TC")}</th><th>${mTip("task_completion", "完成")}</th><th>${mTip("tool_recall", "召回")}</th><th>核验 a/f/m</th></tr>` +
+      (s.per_task || []).map(r => `<tr title="${esc(r.instruction)} (${r.latency_s}s)
+裁判: ${esc(r.tool_correctness_reason || "-")} | ${esc(r.task_completion_reason || "-")}">
         <td><b>${r.task_id}</b></td>
         <td class="wrap" style="max-width:200px">${(r.pred_tools || []).map(esc).join(", ") || "无"}</td>
         <td style="font-size:12px; color:var(--muted)">${(r.expect_tools || []).map(esc).join(", ") || "-"}</td>
-        <td>${chip(r.tool_call_accuracy)}</td>
-        <td>${chip(r.goal_accuracy)}</td>
+        <td>${chip(r.tool_correctness)}</td>
+        <td>${chip(r.task_completion)}</td>
         <td>${fmt(r.tool_recall)}</td>
         <td style="font-size:13px">${chk(r.answer_hit)} ${chk(r.file_hit)} ${chk(r.memory_hit)}</td></tr>`).join("");
   } catch (e) { st.textContent = "加载失败"; }
@@ -1967,6 +2604,451 @@ async function agEval() {
     if (!r.ok) throw new Error((await r.json()).detail || r.status);
     agMetrics();
   } catch (e) { alert("启动失败: " + e); }
+}
+
+/* 一键评测: 生成轨迹(6题) → 等完成 → 计算指标 → 等完成 → 刷新展示 */
+async function agOneClick() {
+  const st = document.getElementById("agmStatus");
+  if (!confirm("一键评测 = 跑全部 6 个任务(真实执行按 API 计费, 约 3-8 分钟)再自动评分, 继续?\n(中途可离开本页, 回来点 ↻ 刷新看进度)")) return;
+  try {
+    let r = await fetch("/api/agent/generate", { method: "POST" });
+    if (!r.ok) throw new Error((await r.json()).detail || r.status);
+    st.textContent = "①/2 轨迹生成中…(智能体逐题执行, 3-8 分钟)";
+    let running = true;
+    for (let i = 0; i < 90 && running; i++) {          // 最多等 15 分钟
+      await new Promise(rr => setTimeout(rr, 10000));
+      try { running = (await jget("/api/agent/trajs")).running; } catch (e) { running = false; }
+    }
+    if (running) { st.textContent = "轨迹生成超时未结束, 可稍后手动点「只算指标」"; return; }
+    st.textContent = "②/2 计算指标中…(裁判逐题打分)";
+    r = await fetch("/api/agent/eval", { method: "POST" });
+    if (!r.ok) throw new Error((await r.json()).detail || r.status);
+    running = true;
+    for (let i = 0; i < 60 && running; i++) {          // 最多等 10 分钟
+      await new Promise(rr => setTimeout(rr, 10000));
+      try { running = (await jget("/api/agent/scores")).running; } catch (e) { running = false; }
+    }
+    st.textContent = running ? "评分超时未结束, 稍后点 ↻ 刷新" : "✓ 一键评测完成";
+    agMetrics();
+  } catch (e) { st.textContent = "失败"; alert("一键评测失败: " + e.message); }
+}
+
+/* 有效状态: 轨迹是每步增量写的, 一有轨迹就被后端标成"判分中"是误判 ——
+   任务文件 10 分钟内有更新 = 智能体实际仍在执行(本地模型单次生成最长可达 7-8 分钟,
+   期间磁盘无任何更新, 窗口太窄会把"等模型"误标成"判分中"), 前端纠正回"执行中" */
+function tbEffStatus(t) {
+  if (t.status !== "verifying") return t.status;
+  const now = new Date();
+  const pm = (t.mtime || "").split(":").map(Number);
+  if (pm.length !== 2 || isNaN(pm[0])) return t.status;
+  const diff = (now.getHours() * 60 + now.getMinutes()) - (pm[0] * 60 + pm[1]);
+  return (diff >= 0 && diff <= 10) ? "agent" : t.status;
+}
+
+/* 跑批实时进度: 逐题状态 + 回放入口; 下方黑框是 Harbor 编排日志(非智能体动作) */
+const TB_STATUS = {agent: ["🔄 智能体执行中", "var(--blue)"], verifying: ["⏳ 判分中", "var(--orange)"],
+                   done: ["✓ 完成", "var(--green)"], error: ["⚠ 异常", "var(--red)"]};
+async function tbLiveProgress() {
+  const box = document.getElementById("tbLive");
+  if (!box) return;
+  try {
+    const p = await jget("/api/tbench/progress");
+    if (!p.exists) { box.style.display = "none"; return; }
+    box.style.display = "";
+    const head = `🔴 实时进度 · ${esc(p.job)} (开始 ${esc(p.ts || "")})` +
+      (p.n_total != null ? ` · <b>完成 ${p.n_completed || 0}/${p.n_total}</b> · 异常 ${p.n_errored || 0} · 运行中 ${p.n_running || 0}` : "");
+    const chips = (p.tasks || []).map(t => {
+      const [txt, color] = TB_STATUS[tbEffStatus(t)] || [t.status, "var(--muted)"];
+      const play = t.has_cast ? `<button class="ghost" style="padding:0 6px; font-size:11px; margin-left:4px; cursor:pointer"
+          title="回放该任务的完整终端录像(asciinema)" onclick="tbCastOpen('${esc(p.job)}','${esc(t.dir)}')">▶</button>` : "";
+      return `<span class="chip" style="margin:2px; border-color:${color}; color:${color}" title="${esc(t.task)} · 更新 ${esc(t.mtime || "")}">
+        ${esc(t.task.length > 26 ? t.task.slice(0, 26) + "…" : t.task)} · ${txt}${t.reward != null ? " " + t.reward : ""}${play}</span>`;
+    }).join(" ");
+    box.innerHTML = `<div class="hint" style="margin-bottom:6px">${head}</div>
+      <div>${chips || "<span class='hint'>等待任务容器创建…</span>"}</div>
+      <div style="margin-top:8px; background:#0d1117; color:#c9d1d9; padding:8px 10px; border-radius:6px; font-size:11px; white-space:pre-wrap; max-height:150px; overflow:auto">${esc((p.log || []).join("\n")).slice(-1200)}</div>
+      <div class="hint" style="margin-top:4px">上方黑框 = Harbor 编排日志; 智能体实时动作看下方「🎬 实时演示」终端直播, 完整录像点任务 chips 的 ▶ 回放</div>`;
+  } catch (e) { box.style.display = "none"; }
+}
+
+/* ---------- 🎬 实时演示: 终端直播(xterm) + 轨迹面板(ATIF) + 回放(asciinema-player) ---------- */
+const TB_DEMO = {job: null, dir: null, offset: 0, buf: "", term: null, cols: 0, rows: 0,
+                 follow: true, nSteps: 0, selJob: ""};
+
+function tbTermEnsure() {
+  if (TB_DEMO.term) return TB_DEMO.term;
+  const el = document.getElementById("tbTerm");
+  if (!el || typeof Terminal === "undefined" || !el.offsetParent) return null;  // 隐藏容器里初始化会渲染异常
+  TB_DEMO.cols = 160; TB_DEMO.rows = 40;  // cast 头里带的尺寸, 默认按 Terminus-2 会话
+  TB_DEMO.term = new Terminal({cols: TB_DEMO.cols, rows: TB_DEMO.rows, fontSize: 10,
+    scrollback: 3000, disableStdin: true, convertEol: false, cursorBlink: true,
+    theme: {background: "#0d1117", foreground: "#c9d1d9"}});
+  TB_DEMO.term.open(el);
+  return TB_DEMO.term;
+}
+
+function tbStreamReset() {
+  TB_DEMO.offset = 0; TB_DEMO.buf = ""; TB_DEMO.nSteps = 0;
+  if (TB_DEMO.term) TB_DEMO.term.reset();
+  const steps = document.getElementById("tbSteps");
+  if (steps) steps.innerHTML = "<div class='hint'>等待轨迹…</div>";
+  const tok = document.getElementById("tbTok");
+  if (tok) tok.textContent = "";
+}
+
+function tbFeedCast(text) {
+  const term = tbTermEnsure();
+  if (!term || !text) return;
+  TB_DEMO.buf += text;
+  const lines = TB_DEMO.buf.split("\n");
+  TB_DEMO.buf = lines.pop();                    // 半截行留缓冲
+  for (const line of lines) {
+    const s = line.trim();
+    if (!s) continue;
+    let ev; try { ev = JSON.parse(s); } catch (e) { continue; }
+    if (!Array.isArray(ev) || ev.length < 3) continue;   // 首行是头对象(dict), 跳过
+    if (ev[1] === "o") term.write(ev[2]);
+  }
+}
+
+function tbRenderSteps(j) {
+  const el = document.getElementById("tbSteps");
+  if (!el) return;
+  const steps = j.steps || [];
+  if (steps.length < TB_DEMO.nSteps) { el.innerHTML = ""; TB_DEMO.nSteps = 0; }  // 轨迹被重写为更短 → 重置
+  if (TB_DEMO.nSteps === 0) el.innerHTML = "";   // 清掉"等待轨迹"占位
+  const fm = j.final_metrics;
+  const tok = document.getElementById("tbTok");
+  if (tok) tok.innerHTML = fm ? `tokens · 输入 ${fm.total_prompt_tokens || 0} · 输出 ${fm.total_completion_tokens || 0}` +
+    (fm.total_cached_tokens ? ` · 缓存命中 ${fm.total_cached_tokens}` : "") : `${steps.length} 步`;
+  const nNew = steps.length - TB_DEMO.nSteps;
+  if (nNew <= 0) { TB_DEMO.nSteps = steps.length; return; }   // 无新步骤: 不碰滚动位置
+  // 用户主动上翻阅读时不抢滚动条; 只有本来就停在底部附近才自动跟随新步骤
+  const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
+  for (let k = TB_DEMO.nSteps; k < steps.length; k++) {
+    const s = steps[k];
+    const who = s.source === "user" ? ["🧑 指令", "var(--orange)"] : ["🤖 思考", "var(--blue)"];
+    const tools = (s.tools || []).map(t =>
+      `<div style="margin:2px 0 2px 10px; color:var(--green)" title="${esc(t.args)}">🔧 ${esc(t.name || "?")} <span class="hint">${esc((t.args || "").slice(0, 90))}</span></div>`).join("");
+    const obs = s.obs ? `<div class="hint" style="margin:2px 0 2px 10px; max-height:52px; overflow:hidden">👁 ${esc(s.obs.slice(0, 160))}</div>` : "";
+    const div = document.createElement("div");
+    div.style.cssText = "margin-bottom:6px; border-bottom:1px dashed var(--line); padding-bottom:4px";
+    div.innerHTML = `<div style="color:${who[1]}; font-weight:600">${who[0]} #${s.i ?? k + 1}</div>` +
+      `<div class="hint" style="max-height:60px; overflow:hidden">${esc((s.text || "").slice(0, 220))}</div>` + tools + obs;
+    el.appendChild(div);
+  }
+  TB_DEMO.nSteps = steps.length;
+  if (nearBottom) el.scrollTop = el.scrollHeight;   // 只在用户处于底部时跟随
+}
+
+async function tbDemoTick() {
+  const page = (location.hash || "#/overview").replace("#/", "");
+  const sect = document.getElementById("ag-tbench");
+  if (document.hidden || page !== "agent" || !sect || sect.style.display === "none") return;
+  let p; try { p = await jget("/api/tbench/progress"); } catch (e) { return; }
+  const box = document.getElementById("tbDemo");
+  if (!box) return;
+  // 轮次下拉(最近 15 轮): 列表变化时重建, 保留用户当前选择
+  const jsel = document.getElementById("tbDemoJob");
+  const jobsSig = (p.jobs || []).map(j => j.name).join(",");
+  if (jsel && jsel.dataset.sig !== jobsSig) {
+    const cur = TB_DEMO.selJob;
+    jsel.innerHTML = `<option value="">🕐 最新轮次(自动跟随)</option>` + (p.jobs || []).map(j =>
+      `<option value="${esc(j.name)}" title="${esc(j.name)}">${esc(j.label || j.name)}</option>`).join("");
+    jsel.dataset.sig = jobsSig;
+    if (cur) jsel.value = cur;
+  }
+  // 实际观看的轮次: 用户选了历史轮次就取那一轮, 否则最新
+  let data = p;
+  if (TB_DEMO.selJob && TB_DEMO.selJob !== p.job) {
+    try { data = await jget(`/api/tbench/progress?job=${encodeURIComponent(TB_DEMO.selJob)}`); }
+    catch (e) { TB_DEMO.selJob = ""; if (jsel) jsel.value = ""; data = p; }
+  }
+  const activeJob = data.exists ? data.job : null;
+  if (!activeJob) { box.style.display = "none"; return; }
+  const tasks = (data.tasks || []);
+  const withCast = tasks.filter(t => t.has_cast);
+  box.style.display = "";
+  if (!withCast.length) {
+    if (TB_DEMO.term) TB_DEMO.term.reset();
+    document.getElementById("tbSteps").innerHTML =
+      `<div class='hint' style='padding:10px'>该轮次没有终端录像(${TB_DEMO.selJob ? "oracle 不录像, 或智能体启动即失败" : "oracle 不录像, 或任务尚未开始"})</div>`;
+    return;
+  }
+  // 任务下拉: 有录像的任务; 手动选择后停止自动跟随, 选"自动跟随"恢复
+  const sel = document.getElementById("tbDemoTask");
+  if (sel && (sel.dataset.job !== activeJob || sel.dataset.sig !== withCast.map(t => t.dir).join(","))) {
+    const cur = TB_DEMO.dir;
+    sel.innerHTML = `<option value="">🔎 自动跟随(运行中的任务)</option>` + withCast.map(t =>
+      `<option value="${esc(t.dir)}">${esc(t.task)} · ${t.status}${t.reward != null ? " · " + t.reward : ""}</option>`).join("");
+    sel.dataset.job = activeJob; sel.dataset.sig = withCast.map(t => t.dir).join(",");
+    if (cur && withCast.some(t => t.dir === cur)) sel.value = cur;
+  }
+  if (TB_DEMO.job !== activeJob) { TB_DEMO.job = activeJob; TB_DEMO.dir = null; tbStreamReset(); }   // 换轮次
+  if (TB_DEMO.follow) {
+    const running = withCast.filter(t => tbEffStatus(t) === "agent").sort((a, b) => (b.mtime || "").localeCompare(a.mtime || ""))[0]
+      || withCast.filter(t => tbEffStatus(t) !== "done").sort((a, b) => (b.mtime || "").localeCompare(a.mtime || ""))[0]
+      || withCast[withCast.length - 1];
+    if (running && running.dir !== TB_DEMO.dir) { TB_DEMO.dir = running.dir; tbStreamReset(); }
+  } else if (!TB_DEMO.dir && withCast[0]) { TB_DEMO.dir = withCast[0].dir; tbStreamReset(); }
+  const playBtn = document.getElementById("tbDemoPlay");   // 当前查看的任务可完整回放(含历史轮次)
+  if (playBtn) playBtn.style.display = TB_DEMO.dir ? "" : "none";
+  if (!TB_DEMO.dir) return;
+  const q = `job=${encodeURIComponent(TB_DEMO.job)}&task=${encodeURIComponent(TB_DEMO.dir)}`;
+  const state = document.getElementById("tbDemoState");
+  const hist = TB_DEMO.selJob && TB_DEMO.selJob !== p.job;
+  const delBtn = document.getElementById("tbJobDel");
+  if (delBtn) delBtn.style.display = TB_DEMO.selJob ? "" : "none";
+  try {
+    const t = await jget(`/api/tbench/tail?${q}&offset=${TB_DEMO.offset}`);
+    if (t.skipped && TB_DEMO.term) { TB_DEMO.term.reset(); TB_DEMO.buf = ""; }
+    TB_DEMO.offset = t.offset;
+    tbFeedCast(t.data);
+    if (state) { state.textContent = t.done ? (hist ? "🕘 历史轮次回看(已结束)" : "✔ 该任务已跑完, 直播停止(点 chips ▶ 看完整回放)")
+                 : (hist ? "🕘 历史轮次回看(已结束)" : "● 直播中…");
+                 state.style.color = t.done ? "var(--green)" : (hist ? "var(--muted)" : "var(--red)"); }
+  } catch (e) { if (state) state.textContent = ""; }
+  try { tbRenderSteps(await jget(`/api/tbench/traj?${q}`)); } catch (e) {}
+}
+function tbPickJob(name) {   // 历史轮次表 → 🎬 入口: 切到该轮次并滚动到演示面板
+  TB_DEMO.selJob = name || "";
+  TB_DEMO.job = null; TB_DEMO.dir = null; tbStreamReset();
+  const jsel = document.getElementById("tbDemoJob");
+  if (jsel && name) jsel.value = name;
+  const box = document.getElementById("tbDemo");
+  if (box) box.scrollIntoView({ behavior: "smooth", block: "center" });
+  tbDemoTick();
+}
+async function tbFetchDel(url, tries = 3) {   // DELETE + 网络失败自动重试(重启空窗几秒内自愈)
+  for (let i = 1; ; i++) {
+    try {
+      const r = await fetch(url, { method: "DELETE" });
+      if (!r.ok) {
+        let d = r.status;
+        try { d = (await r.json()).detail || r.status; } catch (e) {}
+        throw new Error(d);
+      }
+      return;
+    } catch (e) {
+      if (e.message !== "Failed to fetch" || i >= tries)
+        throw new Error(e.message === "Failed to fetch" ? "多次重试仍连不上平台(若刚重启, 请稍等片刻再点)" : e.message);
+      await new Promise(res => setTimeout(res, 2500));
+    }
+  }
+}
+function tbDemoPlay() {   // 演示面板 ▶: 回放播放器完整重放当前查看的任务(任何轮次)
+  if (TB_DEMO.job && TB_DEMO.dir) tbCastOpen(TB_DEMO.job, TB_DEMO.dir);
+}
+async function tbDelHist(ts) {   // 历史表 🗑: 删一行记录 + 其任务目录 + 归档
+  if (!confirm("删除该轮历史记录? 将同时删除其任务目录(终端录像/轨迹)与归档文件, 不可恢复。")) return;
+  try {
+    await tbFetchDel(`/api/tbench/history?ts=${encodeURIComponent(ts)}`);
+    tbRefresh();
+  } catch (e) { alert("删除失败: " + e.message); }
+}
+async function tbDelJob() {     // 演示面板 🗑: 删选中的轮次目录(含孤儿重试轮次)
+  const j = TB_DEMO.selJob;
+  if (!j || !confirm(`删除轮次目录 ${j} ?\n(含该轮全部终端录像与轨迹, 历史表不动, 不可恢复)`)) return;
+  try {
+    await tbFetchDel(`/api/tbench/job?job=${encodeURIComponent(j)}`);
+    TB_DEMO.selJob = ""; TB_DEMO.job = null; TB_DEMO.dir = null; tbStreamReset();
+    const jsel = document.getElementById("tbDemoJob");
+    if (jsel) jsel.value = "";
+    tbDemoTick(); tbRefresh();
+  } catch (e) { alert("删除失败: " + e.message); }
+}
+document.getElementById("tbDemoJob")?.addEventListener("change", function () {
+  TB_DEMO.selJob = this.value;
+  TB_DEMO.job = null; TB_DEMO.dir = null; tbStreamReset();
+  tbDemoTick();
+});
+document.getElementById("tbDemoTask")?.addEventListener("change", function () {
+  TB_DEMO.follow = !this.value;
+  TB_DEMO.dir = this.value || null;
+  tbStreamReset();
+});
+setInterval(tbDemoTick, 2000);
+
+/* ▶ 完整回放: xterm.js 自研播放器(拉 cast → 按时间轴重放)。
+   不用 asciinema-player: 实测其 DOM 渲染器只在页面加载期创建才出画面,
+   点击弹层这种按需创建场景终端区空白(两环境复现), 故弃用。 */
+const TB_CAST = {term: null, events: [], dur: 0, playing: false, speed: 2, clock: 0,
+                 idx: 0, timer: 0, lastTs: 0};
+
+function tbCastFmt(s) {
+  s = Math.max(0, Math.round(s));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+}
+
+function tbCastEmit(upto) {
+  const T = TB_CAST;
+  while (T.idx < T.events.length && T.events[T.idx][0] <= upto) {
+    T.term.write(T.events[T.idx][2]);
+    T.idx++;
+  }
+}
+
+function tbCastUi() {
+  const T = TB_CAST;
+  document.getElementById("tbCastSeek").value = Math.min(T.clock, T.dur);
+  document.getElementById("tbCastTime").textContent = `${tbCastFmt(T.clock)} / ${tbCastFmt(T.dur)}`;
+  document.getElementById("tbCastPlay").textContent = T.playing ? "⏸" : "▶";
+}
+
+function tbCastToggle() {
+  const T = TB_CAST;
+  if (T.playing) { T.playing = false; }
+  else if (T.clock >= T.dur) { tbCastSeekTo(0); T.playing = true; }  // 播完重播
+  else T.playing = true;
+  T.lastTs = performance.now();
+  tbCastUi();
+}
+
+function tbCastSeekTo(t) {
+  const T = TB_CAST;
+  t = Math.max(0, Math.min(t, T.dur));
+  if (t < T.clock) { T.term.reset(); T.idx = 0; }   // 回退需从头重放终端状态
+  T.clock = t;
+  tbCastEmit(t);
+  T.lastTs = performance.now();
+  tbCastUi();
+}
+
+function tbCastBuild(holder, events, dur, cols, rows) {
+  const T = TB_CAST;
+  clearInterval(T.timer);
+  if (T.term) { try { T.term.dispose(); } catch (e) {} T.term = null; }
+  holder.innerHTML = `
+    <div id="tbCastTerm" style="background:#0d1117; border-radius:8px 8px 0 0; padding:6px; overflow:auto"></div>
+    <div style="display:flex; gap:10px; align-items:center; background:#161b22; padding:7px 12px; border-radius:0 0 8px 8px">
+      <button id="tbCastPlay" class="ghost" style="padding:2px 12px; color:#c9d1d9" onclick="tbCastToggle()">⏸</button>
+      <input type="range" id="tbCastSeek" min="0" max="${dur}" step="0.5" value="0" style="flex:1">
+      <span id="tbCastTime" style="color:#c9d1d9; font-size:12px; white-space:nowrap">0:00 / ${tbCastFmt(dur)}</span>
+      <select id="tbCastSpeed" style="padding:2px 4px">
+        <option value="1">1×</option><option value="2" selected>2×</option>
+        <option value="4">4×</option><option value="8">8×</option><option value="16">16×</option>
+      </select>
+    </div>`;
+  T.events = events; T.dur = dur; T.clock = 0; T.idx = 0;
+  T.speed = 2;                            // 每次打开重置回默认 2×(否则残留上次倍速, 与下拉框显示不一致)
+  T.playing = true; T.lastTs = performance.now();
+  T.term = new Terminal({cols, rows, fontSize: 11, disableStdin: true, scrollback: 500,
+    theme: {background: "#0d1117", foreground: "#c9d1d9"}});
+  T.term.open(document.getElementById("tbCastTerm"));
+  document.getElementById("tbCastSpeed").value = String(T.speed);   // 下拉框与引擎状态对齐
+  document.getElementById("tbCastSeek").addEventListener("input", function () {
+    TB_CAST.playing = false; tbCastSeekTo(parseFloat(this.value) || 0);
+  });
+  document.getElementById("tbCastSpeed").addEventListener("change", function () {
+    TB_CAST.speed = parseFloat(this.value) || 2; TB_CAST.lastTs = performance.now();
+  });
+  T.timer = setInterval(() => {           // 50ms 步进(不依赖 rAF, 后台标签也能走)
+    if (!T.playing || !T.term) return;
+    const now = performance.now();
+    T.clock += (now - T.lastTs) / 1000 * T.speed;
+    T.lastTs = now;
+    if (T.clock >= T.dur) { T.clock = T.dur; tbCastEmit(T.dur); T.playing = false; }
+    else tbCastEmit(T.clock);
+    tbCastUi();
+  }, 50);
+}
+
+async function tbCastOpen(job, dir) {
+  const modal = document.getElementById("tbCastModal");
+  if (!modal) return;
+  modal.style.display = "";
+  document.getElementById("tbCastTitle").textContent = "▶ 终端回放 · " + (dir || "").split("__")[0];
+  const holder = document.getElementById("tbCastPlayer");
+  holder.innerHTML = "<div class='hint' style='padding:24px'>录像加载中…</div>";
+  let text;
+  try {
+    const r = await fetch(`/api/tbench/cast?job=${encodeURIComponent(job)}&task=${encodeURIComponent(dir)}`);
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    text = await r.text();
+  } catch (e) {
+    holder.innerHTML = `<div class='hint' style='color:var(--red); padding:24px'>录像加载失败: ${esc(e.message)}</div>`;
+    return;
+  }
+  const events = []; let cols = 160, rows = 40, dur = 0;
+  for (const line of text.split("\n")) {
+    const s = line.trim();
+    if (!s) continue;
+    let d; try { d = JSON.parse(s); } catch (e) { continue; }
+    if (Array.isArray(d)) { if (d[1] === "o") { events.push(d); dur = Math.max(dur, d[0] || 0); } }
+    else if (d && d.width) { cols = d.width; rows = d.height; }
+  }
+  if (!events.length) {
+    holder.innerHTML = "<div class='hint' style='padding:24px'>该录像没有终端输出事件(智能体未产生操作)</div>";
+    return;
+  }
+  tbCastBuild(holder, events, dur, cols, rows);
+}
+
+function tbCastClose() {
+  const modal = document.getElementById("tbCastModal");
+  if (modal) modal.style.display = "none";
+  clearInterval(TB_CAST.timer);           // 停播放循环
+  if (TB_CAST.term) { try { TB_CAST.term.dispose(); } catch (e) {} TB_CAST.term = null; }
+  document.getElementById("tbCastPlayer").innerHTML = "";
+}
+
+/* 🔍 harbor view: 官方轨迹浏览器, 平台拉起后给链接(容器部署需映射 8080-8089) */
+async function tbViewStart() {
+  const link = document.getElementById("tbViewLink"), st = document.getElementById("tbDemoState");
+  try {
+    try {
+      await tbPostJSON("/api/tbench/view", {});   // 双通道(fetch被拦自动走XHR)
+    } catch (postErr) {                            // 双通道都拦时走 GET 兜底(?start=1 兼做启动)
+      await jget("/api/tbench/view?start=1");
+    }
+    if (st) st.textContent = "harbor view 启动中(首次可能要构建前端, 最长约1分钟)…";
+    for (let i = 0; i < 20; i++) {
+      await new Promise(res => setTimeout(res, 3000));
+      const s = await jget("/api/tbench/view");
+      if (s.port) {
+        const url = `http://${location.hostname}:${s.port}`;
+        link.href = url; link.style.display = ""; link.textContent = `打开 harbor view :${s.port}`;
+        link.target = "_blank";
+        if (st) { st.textContent = `harbor view 运行中 :${s.port}`; st.style.color = "var(--green)"; }
+        window.open(url, "_blank");
+        return;
+      }
+      if (!s.running) throw new Error("进程退出: " + (s.log || []).slice(-3).join(" | "));
+    }
+    throw new Error("超时未就绪, 看 runs/tbench/view.log");
+  } catch (e) { if (st) { st.textContent = "harbor view 失败: " + e.message; st.style.color = "var(--red)"; } }
+}
+
+/* Langfuse ↔ DeepEval 对话抽样评分: 拉最近轨迹 → GEval 打分 → 分数写回 Langfuse */
+async function agChatScore() {
+  try {
+    const r = await fetch("/api/agent/chatscore", { method: "POST" });
+    if (!r.ok) throw new Error((await r.json()).detail || r.status);
+    loadChatscores(true);
+  } catch (e) { alert("启动失败: " + e); }
+}
+async function loadChatscores(poll) {
+  const el = document.getElementById("agChatScore");
+  if (!el) return;
+  try {
+    const s = await jget("/api/agent/chatscores");
+    if (s.running) {
+      el.style.display = "";
+      el.innerHTML = "<div class='hint'>● 抽样评分运行中…(每条轨迹一次裁判调用, 约几十秒)</div>";
+      if (poll) setTimeout(loadChatscores, 4000);
+      return;
+    }
+    if (!s.exists) { el.style.display = "none"; return; }
+    el.style.display = "";
+    el.innerHTML = `<h3 style="margin-top:0">🔬 DeepEval × Langfuse 抽样评分</h3>
+      <div class="hint">${esc(s.ts || "")} · 裁判 ${esc(s.judge || "-")} · 均分 <b>${s.mean == null ? "-" : s.mean}</b>
+       · ${s.n || 0} 条 · 写回 Langfuse ${s.writeback_ok == null ? "-" : s.writeback_ok} 条</div>` +
+      (s.items || []).map(i => `<div class="hint" style="margin:2px 0" title="${esc(i.reason || "")}">
+        <span class="sc ${i.score >= 0.7 ? "g" : i.score >= 0.4 ? "o" : "r"}" style="min-width:36px">${i.score}</span>
+        ${esc(String(i.trace_id || "")).slice(0, 16)}… · 写回${i.writeback === 201 || i.writeback === 200 ? "✓" : i.writeback} ·
+        ${esc((i.reason || "").slice(0, 70))}</div>`).join("") +
+      (s.note ? `<div class="hint">${esc(s.note)}</div>` : "");
+  } catch (e) { /* 静默: 未部署 langfuse 时面板隐藏 */ }
 }
 
 /* ================= M2: LLM 基准 (OpenCompass) ================= */
@@ -2463,19 +3545,34 @@ async function viewTrace(id) {
     if (d.error) { box.innerHTML = `<span class="hint" style="color:var(--red)">${esc(d.error)}</span>`; return; }
     const t = d.trace;
     const typeBadge = o => o.type === "GENERATION" ? `<span class="chip on" style="padding:1px 8px">LLM</span>`
-      : o.type === "SPAN" ? `<span class="chip" style="padding:1px 8px">工具/步骤</span>`
+      : o.type === "SPAN" ? `<span class="chip" style="padding:1px 8px">步骤/工具</span>`
       : `<span class="chip" style="padding:1px 8px">${esc(o.type || "")}</span>`;
+    // 按父子关系排出层级: 无 parent 的为根, 子项缩进
+    const byParent = {};
+    (t.observations || []).forEach(o => { const p = o.parent_id || "_"; (byParent[p] = byParent[p] || []).push(o); });
+    const rows = [];
+    (function walk(parent, depth) {
+      (byParent[parent] || []).forEach(o => { rows.push({o, depth}); walk(o.id, depth + 1); });
+    })("_", 0);
+    if (!rows.length && t.observations) t.observations.forEach(o => rows.push({o, depth: 0}));
+    const scoreHtml = (t.scores || []).map(s =>
+      `<span class="chip ${s.value != null && s.value >= 0.7 ? "on" : ""}" style="padding:1px 8px" title="${esc(s.comment || "")}">
+        ${esc(s.name)}: ${s.value == null ? "-" : s.value}</span>`).join(" ");
     box.innerHTML = `
-      <div class="q"><b>${esc(t.name || id)}</b> · ${esc(t.timestamp)}</div>
+      <div class="q"><b>${esc(t.name || id)}</b> · ${esc(t.timestamp)}
+        ${scoreHtml ? `<span style="margin-left:8px">${scoreHtml}</span>` : ""}
+        <a href="${esc(d.host || "")}/trace/${esc(id)}" target="_blank"
+           style="float:right; font-size:12px">在 Langfuse 打开完整版 ↗</a></div>
       ${t.input ? `<details style="margin-top:6px"><summary style="font-size:12px;color:var(--muted)">轨迹输入</summary><pre>${esc(t.input)}</pre></details>` : ""}
       ${t.output ? `<details style="margin-top:4px"><summary style="font-size:12px;color:var(--muted)">最终输出</summary><pre>${esc(t.output)}</pre></details>` : ""}
-      <div class="hint" style="margin-top:8px">执行层级 (${t.observations.length} 项, 按时间序)</div>
-      ${t.observations.map(o => `
-        <div class="qcard" style="padding:8px 10px; margin:6px 0">
+      <div class="hint" style="margin-top:8px">执行层级 (${rows.length} 项 · 缩进=父子层级 · 平台内输入输出截断到 4000 字)</div>
+      ${rows.map(({o, depth}) => `
+        <div class="qcard" style="padding:8px 10px; margin:6px 0; margin-left:${depth * 22}px">
           ${typeBadge(o)} <b>${esc(o.name || "?")}</b>
+          ${o.level === "ERROR" ? ` <span style="color:var(--red); font-size:12px">⚠ 出错</span>` : ""}
           <span class="hint">${o.latency_s != null ? o.latency_s + "s" : ""} ${o.model ? "· " + esc(o.model) : ""} ${o.total_tokens ? "· " + o.total_tokens + " tok" : ""}</span>
-          ${o.input ? `<details><summary style="font-size:12px;color:var(--muted)">输入</summary><pre style="font-size:11px">${esc(o.input)}</pre></details>` : ""}
-          ${o.output ? `<details><summary style="font-size:12px;color:var(--muted)">输出</summary><pre style="font-size:11px">${esc(o.output)}</pre></details>` : ""}
+          ${o.input ? `<details><summary style="font-size:12px;color:var(--muted)">输入</summary><pre style="font-size:11px; white-space:pre-wrap">${esc(o.input)}</pre></details>` : ""}
+          ${o.output ? `<details><summary style="font-size:12px;color:var(--muted)">输出</summary><pre style="font-size:11px; white-space:pre-wrap">${esc(o.output)}</pre></details>` : ""}
         </div>`).join("")}`;
   } catch (e) { box.innerHTML = `<span class="hint">详情加载失败</span>`; }
 }
@@ -2694,14 +3791,43 @@ route(); renderEngines(); refreshOverview(); refreshScores(); refreshLog();
 dictInit(); llmSubjectsInit(); refreshCacheStatus(); rpRefresh();
 // 检索若在跑, 恢复监控
 jget("/api/retrieve/status").then(s => { if (s.running) retrieveWatcher(); }).catch(() => {});
-agentStatus(); agentFiles(); agentTasks(); agMetrics();
+agentStatus(); agentFiles(); agentTasks(); agMetrics(); tbRefresh();
 llmRefresh(); llmModelsRefresh(); llmHistoryRefresh(); rtRefresh(); rtCasesRefresh();
 loadSettings(); ragModelCurRefresh(); histOverviewRefresh();
-setInterval(refreshOverview, 5000);
-setInterval(() => { refreshScores(); refreshLog(); }, 15000);
-setInterval(agentStatus, 12000);
-setInterval(() => { llmRefresh(); llmModelsRefresh(); llmHistoryRefresh(); rtRefresh(); }, 10000);
-setInterval(() => { agMetrics(); histOverviewRefresh(); }, 8000);
+/* 统一刷新调度: 只刷"当前页面 + 当前页签"可见的内容, 5s 一轮(后台标签页暂停)。
+   切换页面 / 切回浏览器标签页时立即刷新一次。替代原先 5 套无差别全局定时器。 */
+function pageTick() {
+  if (document.hidden) return;
+  const p = (location.hash || "#/overview").replace("#/", "");
+  if (p === "overview") { refreshOverview(); histOverviewRefresh(); }
+  else if (p === "rag") { refreshScores(); refreshLog(); }
+  else if (p === "llm") { llmRefresh(); llmModelsRefresh(); llmHistoryRefresh(); }
+  else if (p === "redteam") { rtRefresh(); }
+  else if (p === "agent") {
+    agentStatus();
+    const tabs = { "ag-tbench": tbRefresh, "ag-eval": agMetrics,
+                   "ag-traj": () => loadChatscores(false) };
+    for (const [id, fn] of Object.entries(tabs)) {
+      const el = document.getElementById(id);
+      if (el && el.style.display !== "none") fn();
+    }
+  }
+}
+setInterval(pageTick, 5000);
+document.addEventListener("visibilitychange", () => { if (!document.hidden) pageTick(); });
+window.addEventListener("hashchange", () => setTimeout(pageTick, 100));
 </script>
+
+<!-- ▶ 终端回放弹层(asciinema-player) -->
+<div id="tbCastModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.6); z-index:99; overflow:auto; padding:28px" onclick="if(event.target===this)tbCastClose()">
+  <div style="background:#fff; max-width:1100px; margin:auto; border-radius:10px; padding:14px">
+    <div style="display:flex; align-items:center; gap:10px">
+      <b id="tbCastTitle"></b><span style="flex:1"></span>
+      <button class="ghost" style="padding:3px 12px" onclick="tbCastClose()">✕ 关闭</button>
+    </div>
+    <div id="tbCastPlayer" style="margin-top:10px; background:#0d1117; border-radius:8px"></div>
+    <div class="hint" style="margin-top:6px">▶/⏸ 播放暂停 · 进度条拖动跳转 · 倍速可选 · 完整录像文件: runs/tbench/jobs/&lt;job&gt;/&lt;任务&gt;/agent/recording.cast</div>
+  </div>
+</div>
 </body>
 </html>

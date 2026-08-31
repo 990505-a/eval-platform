@@ -28,8 +28,14 @@ HERE = Path(__file__).resolve().parent
 PLATFORM = HERE.parent.parent
 WORK_DIR = PLATFORM / "runs" / "llm" / "work"
 LATEST = PLATFORM / "runs" / "llm" / "latest.json"
-SP = PLATFORM / ".venv-opencompass" / "Lib" / "site-packages"
-OC_VENV_PY = PLATFORM / ".venv-opencompass" / "Scripts" / "python.exe"
+# venv 布局随平台: Windows=Scripts\python.exe + Lib\site-packages; Linux/Mac(容器)=bin/python + lib/python3.x
+IS_WIN = os.name == "nt"
+if IS_WIN:
+    SP = PLATFORM / ".venv-opencompass" / "Lib" / "site-packages"
+    OC_VENV_PY = PLATFORM / ".venv-opencompass" / "Scripts" / "python.exe"
+else:
+    SP = next((PLATFORM / ".venv-opencompass" / "lib").glob("python*/site-packages"))
+    OC_VENV_PY = PLATFORM / ".venv-opencompass" / "bin" / "python"
 DATA = HERE / "data"
 LITE_CFG_DIR = HERE / "lite_cfgs"
 # 部分网关套了 Cloudflare, 按特征封 python-urllib 的默认 UA (HTTP 403 error 1010); 统一带浏览器 UA
@@ -230,6 +236,9 @@ BENCHES = {
                      src_path="opencompass/mmlu_pro", kind="parquet", per=20,
                      extra_cfgs=("mmlu_pro_categories.py",),
                      label="MMLU-Pro", note="MMLU 继任 · 10 选项研究生级 · 每类前 20 题", est=280, subjects=14),
+    # 自有题库: 平台「LLM 基准→自有题库」在线维护/AI 合成采纳, 不截断(kind=custom 走手写 lite_own.py)
+    "own": dict(src=None, kind="custom", per=0,
+                label="自有题库", note="自己攒的选择题 · LLM 页「自有题库」页签维护", est=0, subjects=1),
 }
 CEVAL_INFO = dict(label="C-Eval", note="中文综合知识 · 52 学科", est=260,
                   datasets_arg="lite_ceval", subjects=52)
@@ -597,6 +606,13 @@ BENCH = sys.argv[2] if len(sys.argv) > 2 else "ceval"
 if BENCH not in BENCHES:
     sys.exit(f"[bench] 未知基准 {BENCH}, 可选: {', '.join(BENCHES)}")
 B = BENCHES[BENCH]
+if BENCH == "own":  # 自有题库: 空题库就地拦截; 实际题数写进 est(平台题级进度分母)
+    _own_jsonl = DATA / "own" / "own.jsonl"
+    _n_own = sum(1 for _ in _own_jsonl.open(encoding="utf-8")) if _own_jsonl.exists() else 0
+    if not _n_own:
+        sys.exit("[bench] 自有题库为空: 先在平台 🎓 LLM 基准页「自有题库」添加或采纳题目")
+    BENCHES["own"] = B = dict(B, est=_n_own)
+    print(f"[bench] 自有题库共 {_n_own} 题", flush=True)
 
 single_instance_guard(MODEL)
 

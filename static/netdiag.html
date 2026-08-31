@@ -1,0 +1,43 @@
+<!doctype html><meta charset="utf-8">
+<title>网络体检</title>
+<h3>🩺 浏览器 → 平台 请求链路体检</h3>
+<div class="hint" style="margin-bottom:10px">逐项测试不同类型的请求能否到达平台服务端。全绿=正常; 哪行红, 问题就在哪。</div>
+<div id="out" style="font-family:monospace; font-size:13px; white-space:pre-wrap; padding:12px; background:#f6f8fa; border-radius:8px; line-height:1.9">体检中…</div>
+<div style="margin-top:10px"><button class="ghost" onclick="location.reload()" style="padding:4px 14px">重跑体检</button></div>
+<script>
+const rows = [];
+const log = (k, ok, info) => {
+  rows.push(`${ok ? "✅" : "❌"} ${k.padEnd(26, " ")} ${info}`);
+  document.getElementById("out").textContent = rows.join("\n");
+};
+const probe = (name, url, opts, okStatuses = [200, 400, 404, 409]) =>
+  fetch(url, opts).then(r => log(name, true, `HTTP ${r.status}`))
+    .catch(e => log(name, false, e.message));
+
+(async () => {
+  log("环境", true, `origin=${location.origin} · online=${navigator.online ?? navigator.onLine}`);
+  log("fetch 是否原生", fetch.toString().includes("native code"),
+      fetch.toString().includes("native code") ? "原生 (无插件包装)" : "⚠️ 被包装过! " + fetch.toString().slice(0, 60));
+  if (navigator.serviceWorker) {
+    const regs = await navigator.serviceWorker.getRegistrations().catch(() => []);
+    log("Service Worker", regs.length === 0, regs.length ? "⚠️ 存在注册!" : "无");
+  }
+  await probe("① GET", "/api/tbench/status");
+  await probe("② POST 无头无体", "/api/tbench/run", { method: "POST" });
+  await probe("③ POST 表单体", "/api/tbench/run",
+    { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: "bench=tb21" });
+  await probe("④ POST JSON(线上同款)", "/api/tbench/run",
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ bench: "tb21" }) });
+  await probe("⑤ DELETE", "/api/tbench/history?ts=diag", { method: "DELETE" });
+  // XHR 通道对照: 插件常只 hook fetch
+  await new Promise(res => {
+    const x = new XMLHttpRequest();
+    x.open("POST", "/api/tbench/run");
+    x.setRequestHeader("Content-Type", "application/json");
+    x.onload = () => { log("⑥ XHR POST JSON", true, `HTTP ${x.status}`); res(); };
+    x.onerror = () => { log("⑥ XHR POST JSON", false, "网络层失败"); res(); };
+    x.send(JSON.stringify({ bench: "tb21" }));
+  });
+  log("说明", true, "②-⑤ 预期 400(参数校验)=链路通; 红色行=被拦截点");
+})();
+</script>

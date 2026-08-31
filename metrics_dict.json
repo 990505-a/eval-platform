@@ -112,6 +112,41 @@
    "group": "公共配置(所有模式统一生效)",
    "one_liner": "对所有模式统一生效的旋钮: 查多少实体(top_k)、取多少原文块(chunk_top_k)、上下文预算、要不要重排(rerank)、回答风格。",
    "detail": "改任何一个, 数据和分数自动作废重跑 —— 这是故意的, 保证对比表里永远同参数, 差异只来自检索方式本身。"
+  },
+  {
+   "key": "rf-vector",
+   "label": "rf-vector 纯向量",
+   "group": "RAGFlow 五模式(对比维度)",
+   "one_liner": "RAGFlow 只用向量相似度从 ES 里捞原文块, 向量权重=1.0, 不掺词项得分。",
+   "detail": "语义近邻检索, 速度秒级、无 LLM 依赖; 对措辞不同的同义问题较稳, 但关键词精确匹配(人名/回目)弱于词项加权。"
+  },
+  {
+   "key": "rf-hybrid",
+   "label": "rf-hybrid 向量+词项加权",
+   "group": "RAGFlow 五模式(对比维度)",
+   "one_liner": "向量相似度与词项(BM25 系)得分各占一半加权排序, 兼顾语义与字面命中。",
+   "detail": "RAGFlow 默认检索形态的均衡版; 人物名/专名命中的题通常比纯向量好。注意 RAGFlow 的 keyword=true 查询改写路径需要配置 chat model, 本环境未配, 故不设该模式。"
+  },
+  {
+   "key": "rf-rerank",
+   "label": "rf-rerank 加权+重排",
+   "group": "RAGFlow 五模式(对比维度)",
+   "one_liner": "在 rf-hybrid 的基础上把召回块过一遍 Qwen3-Reranker(本地 MLX) 再排序。",
+   "detail": "重排对首屏精确度提升明显(实测甄士隐相关题第一块即命中第一回原文); 零 API 费用, 但增加一次本地推理延迟。"
+  },
+  {
+   "key": "rf-term",
+   "label": "rf-term 纯词项",
+   "group": "RAGFlow 五模式(对比维度)",
+   "one_liner": "只用词项相似度(BM25 系)从原文里捞块, 向量权重=0, 靠字面命中。",
+   "detail": "人名/回目/专名等字面精确匹配的题它最强, 同义改述的题最弱 —— 与 rf-vector 正好构成两极对照, 用来判断题目到底靠语义还是靠关键词。"
+  },
+  {
+   "key": "rf-keyword",
+   "label": "rf-keyword LLM 查询改写",
+   "group": "RAGFlow 五模式(对比维度)",
+   "one_liner": "先用默认 chat 模型(glm-4.7)从问题里抽关键词拼进查询, 再做加权混合检索。",
+   "detail": "口语化/长问题经改写后召回更准, 代价是每题多一次 LLM 调用(秒级)。RAGFlow v0.27 的 keyword 路径要求租户配默认 chat model, 已配智谱 glm-4.7。"
   }
  ],
  "engines": [
@@ -473,51 +508,51 @@
   {
    "id": "agent",
    "icon": "🤖",
-   "name": "ragas · 智能体轨迹指标",
+   "name": "DeepEval · 智能体轨迹指标",
    "ms": "M3",
-   "intro": "被测对象是 agent/ 里的 deepagents 智能体。跑固定任务集(6 题)生成轨迹(工具调用序列 + 最终回答), 指标分三层: ragas 严格口径(tool_call_accuracy / goal_accuracy)、自定义宽松口径(tool_recall)、确定性核验(answer/file/memory_hit)。智能体指标的本质是把『轨迹』(消息+工具调用序列)当作被比对的对象 —— 与 RAG 指标比对的『文本』相对应。",
+   "intro": "线B·轨迹质量(智能体测评的判分流派之一, 另一条是线A任务完成度基准)。被测对象是 agents/mingzhu-agent 的 deepagents 智能体: 跑固定任务集(6 题)生成轨迹(工具调用序列 + 最终回答 + 文件/记忆终态证据), 指标分两层: DeepEval 裁判(tool_correctness / task_completion, 任意 OpenAI 兼容端点当裁判) + 确定性核验(tool_recall / answer_hit / file_hit / memory_hit, 对照期望标注与环境终态, 零 API)。智能体指标的本质是把『轨迹』(消息+工具调用序列)当作被比对的对象 —— 与 RAG 指标比对的『文本』相对应。",
    "metrics": [
     {
-     "key": "tool_call_accuracy",
-     "label": "工具调用准确率 (ragas 严格)",
-     "type": "ragas 规则",
-     "question": "该用的工具, 是不是不多不少正好?",
-     "essence": "多重集合(multiset)精确匹配: 实际与期望的工具名各自排序后必须完全一致 —— 条数、种类、每种的数量都相同才得 1, 多调任何工具(包括 todo_write 这类规划工具)直接 0。是『全对才给分』的 all-or-nothing 口径, 与 HitRate 的『擦边也算过』相反。",
-     "lineage": "工具轨迹评测的严格口径(ragas ToolCallAccuracy, strict_order=False → 忽略顺序只比多重集合); 概念上是 Exact Match 在工具序列上的特化",
-     "inputs": "轨迹的工具调用名称序列 + 任务集 expect_tools",
-     "how": "把智能体实际调的工具名单和期望名单排序后对比, 必须一模一样才得 1, 多调一个(包括它自己做规划的 todo_write)直接 0。",
-     "example": "期望 [corpus_search], 实际 [corpus_search, todo_write] → 多调一个 → 0; 期望 [corpus_search, write_file], 实际 [corpus_search] → 少调一个 → 0",
-     "range": "0/1",
+     "key": "tool_correctness",
+     "label": "工具调用正确性 (DeepEval 裁判)",
+     "type": "DeepEval GEval",
+     "question": "该用的工具用了没? 多调的恰当吗?",
+     "essence": "LLM 裁判对照期望工具集合评判实际调用: 漏调关键工具、调用与任务无关的工具都扣分, 连续 0-1。与 tool_recall 的『多调不罚』相对, 这是严格口径 —— 该配对看: recall 管『该用的都用了吗』(查全), correctness 管『用的对不对』(查准)。",
+     "lineage": "LLM-as-judge 流派。前身是 ragas ToolCallAccuracy(多重集合精确匹配、all-or-nothing、额外调用直接判 0), 2026-08 换代为 DeepEval GEval 裁判: 连续打分对『多调一个规划类工具』不再一票否决, 区分度更好",
+     "inputs": "轨迹的工具调用序列 + 任务集 expect_tools",
+     "how": "GEval 裁判: 输入=期望工具集合+判分标准(该用的用了/多调不当扣分/只评名称与必要性), 实际=调用清单, 输出 0-1 与理由(evaluate.py, 裁判模型走模块设置-agent)",
+     "example": "期望 [search_classics, write_file], 实际 [search_classics, write_file, remember] → 多调一个无关工具 → 裁判酌情给 ~0.7; 若漏调 write_file → ~0.4",
+     "range": "0-1",
      "direction": "higher",
-     "pitfall": "子代理内部调的工具不会出现在外层记录里 —— 期望里写了 write_file 的任务必 0 分, 是口径太严, 不是它笨。"
+     "pitfall": "裁判有噪声, 分差<5%别当真; 对『多调规划类工具(todo_write)』的宽容度随裁判模型漂移, 两轮对比必须同裁判(历史轮次的裁判标记就是干这个的)"
     },
     {
      "key": "tool_recall",
      "label": "工具召回率 (宽松)",
-     "type": "自定义规则",
+     "type": "确定性核验(自算)",
      "question": "期望用的工具, 都用上了吗?",
-     "essence": "|期望 ∩ 实际| / |期望| —— 正是 IR 检索指标里 Recall 的定义, 作用在工具集合上。与 tool_call_accuracy 成对: recall 管『该用的都用了吗』(查全), accuracy 管『用的对不对』(查准)。",
-     "lineage": "IR Recall 在工具集合上的直接应用(平台自定义, 正是因为 ragas 严格口径在子代理场景失真)",
+     "essence": "|期望 ∩ 实际| / |期望| —— 正是 IR 检索指标里 Recall 的定义, 作用在工具集合上。与 tool_correctness 成对: recall 管『该用的都用了吗』(查全), accuracy 管『用的对不对』(查准)。",
+     "lineage": "IR Recall 在工具集合上的直接应用(平台自定义, 历史上因 ragas 严格口径在子代理场景失真而自建)",
      "inputs": "轨迹工具调用集合 + expect_tools",
      "how": "期望名单里被实际用到的比例, 多调不罚。",
-     "example": "期望 [corpus_search, write_file], 实际调了 [corpus_search, rag_query, task, write_file] → 交集 2 → recall = 2/2 = 1.0, 但 accuracy = 0(多调了) —— 解读: 该干的都干了, 但动作不干净",
+     "example": "期望 [corpus_search, write_file], 实际调了 [corpus_search, rag_query, task, write_file] → 交集 2 → recall = 2/2 = 1.0, 但 correctness 会被裁判扣分(多调了) —— 解读: 该干的都干了, 但动作不干净",
      "range": "0-1",
      "direction": "higher",
      "pitfall": "宽松版口径: recall 高 + accuracy 低 = 活干了但顺手多调了别的。"
     },
     {
-     "key": "goal_accuracy",
-     "label": "任务达成率 (LLM 裁判)",
-     "type": "LLM 裁判",
-     "question": "任务最后真完成了吗?",
-     "essence": "结果状态断言: 裁判从消息流推断『最终世界状态发生了什么』(文件写了没/记忆存了没/答案含不含), 再与期望产出陈述做二值比对。比工具序列比对更接近『用户在乎什么』—— 过程错了结果对, 用户其实能接受。",
-     "lineage": "ragas AgentGoalAccuracyWithReference; 本质是 NLI(期望陈述 vs 轨迹推断的状态)的单条判定",
-     "inputs": "完整消息流(指令/工具调用/最终回答) + 期望产出描述",
-     "how": "裁判读完整段轨迹, 判断'最终结果发生了没有'(比如文件真写了吗), 是=1 否=0。",
-     "example": "任务要求生成 taoyuan.md: 轨迹里工具返回『已写入』且后续 read 能读到 → 裁判断言状态=文件已生成 → 与期望一致 → 1",
-     "range": "0/1",
+     "key": "task_completion",
+     "label": "任务完成度 (DeepEval 裁判)",
+     "type": "DeepEval GEval",
+     "question": "任务目标最终达成了吗?",
+     "essence": "LLM 裁判综合最终回答 + 工作区文件 + 长期记忆快照等终态证据, 判断任务目标达成度(连续 0-1)。线A 基准(Terminal-Bench 2 等)里这活由环境内确定性测试干, 业务任务集没有测试套件才用裁判兜底 —— 『尽量客观规则, 裁判兜底』三要素方法论的兜底位。",
+     "lineage": "LLM-as-judge 流派。前身 ragas AgentGoalAccuracy(二值 0/1), 换代为 DeepEval GEval 连续打分, 能区分『完全没做』和『做了一半』",
+     "inputs": "任务指令 + 期望要点(answer_contains/file/memory) + 轨迹终态证据(文件列表/记忆快照)",
+     "how": "GEval 裁判: 输入=任务指令+期望要点+判分标准, 实际=最终回答+文件+记忆证据, 输出 0-1 与理由 (run_tasks.py 跑批时采集证据, evaluate.py 评分)",
+     "example": "要求写入报告文件但只口头回答 → 文件证据缺失 → ~0.3; 检索并引用了原文且文件落盘 → ~0.9",
+     "range": "0-1",
      "direction": "higher",
-     "pitfall": "文件真写了但裁判没从轨迹里看出来, 也会判 0 —— 期望产出的写法很影响它。"
+     "pitfall": "裁判看不到执行过程, 只看终态与回答: 过程错误但结果侥幸正确会得高分(过程问题由 tool_correctness 抓); 同理 file_hit=1 但内容空洞时它会高估"
     },
     {
      "key": "answer_hit",
@@ -570,6 +605,43 @@
      "range": "秒",
      "direction": "lower",
      "pitfall": "包含模型生成时间, API 一抖它就飘。"
+    }
+   ]
+  },
+  {
+   "id": "tbench",
+   "icon": "🏁",
+   "name": "Harbor · 智能体基准(线A)",
+   "ms": "M3",
+   "intro": "线A·任务完成度基准: Terminus-2(榜单同款官方智能体, 原生支持任意 OpenAI 兼容端点 api_base)在Harbor 官方 harness 里逐题进独立 Docker 容器干活, 任务完成后容器内跑确定性测试判分 —— 不靠裁判, 分数可与公开榜横向对比。基准矩阵: Terminal-Bench 2.0/2.1/Pro · τ³-bench · GAIA · SWE-bench Verified, 产物 runs/tbench/(latest.json + history.jsonl + jobs/ 轨迹)。",
+   "metrics": [
+    {
+     "key": "pass_rate",
+     "label": "通过率 (pass@1)",
+     "type": "容器内测试",
+     "question": "任务在环境里真实完成了吗?",
+     "essence": "n 道任务各自在容器内跑测试, 通过数/总数。判分依据是环境终态(文件/进程/测试结果), 不是模型自述 —— 模型说'已完成'但测试没过就是没过。",
+     "lineage": "pass@1 家族: Terminal-Bench(reward 0-1 均值同口径)/OSWorld/TheAgentCompany 均此口径; SWE-bench 系叫 resolved rate(单测通过且补丁合法), 名异义同",
+     "inputs": "Harbor 逐任务 result.json 的 verifier_result.rewards.reward",
+     "how": "reward>0 记通过, 汇总 passed/n; oracle 参考解应得 1.0(环境预检的自检标准)",
+     "example": "TB2 限 4 题跑出 2 过 → pass_rate 0.5; 公开榜口径一致, 可直接对比",
+     "range": "0-1",
+     "direction": "higher",
+     "pitfall": "限题抽样方差大(4 题时 1 题就 25%), 模型对比建议全量或固定同一子集; 对比公开榜时注意 agent 骨架要同款(Terminus-2 对 Terminus-2)才公平"
+    },
+    {
+     "key": "pass_at_k",
+     "label": "pass^k (τ-bench 系稳定性口径)",
+     "type": "容器/数据库终态",
+     "question": "同一任务重复 k 次都稳定通过吗?",
+     "essence": "τ²/τ³-bench 的口径: 同一任务跑 k 次, k 次全部成功才算过 —— 惩罚'碰运气过关', 衡量智能体的稳定性而非单次上 limit。",
+     "lineage": "Sierra τ-bench 系原创; 与 pass@k(k 次里至少一次成功, 会奖励碰运气)方向相反",
+     "inputs": "同任务 k 次尝试的终态比对结果(τ 系为数据库终态)",
+     "how": "min over k 次的 pass 标记; 平台跑批 k=1 时等价于 pass@1",
+     "example": "k=4 时 3 过 1 败 → pass^4 = 0(哪怕 pass@1 高达 75%)",
+     "range": "0-1",
+     "direction": "higher",
+     "pitfall": "对比 τ 榜分数必须对齐 domain/任务版本/模拟用户模型/scaffold/pass^k 的 k, 差一样分数就不可比"
     }
    ]
   },

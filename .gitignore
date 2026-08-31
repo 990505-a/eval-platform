@@ -14,3 +14,20 @@ engines/opencompass/data/_hf/
 engines/opencompass/tmp/
 engines/opencompass/icl_inference_output/
 *.pid
+# RAG 胶水层产物 (题集种子 eval_questions.jsonl 保留入库)
+engines/ragas/results/*
+!engines/ragas/results/.gitkeep
+engines/ragas/logs/*
+!engines/ragas/logs/.gitkeep
+engines/ragas/data/eval_*
+!engines/ragas/data/eval_questions.jsonl
+.venv-agenteval/
+.venv-tbench/
+agents/mingzhu-agent/workspace/
+# macOS
+.DS_Store
+# RAG: MLX 模型权重(726M)与 LightRAG 索引(运行产物, 本地保留不入库; 语料 corpus/ 保留)
+rag/mlx-models/
+rag/mingzhu-rag/rag_storage/
+# 工具脚本日志
+scripts/*.log

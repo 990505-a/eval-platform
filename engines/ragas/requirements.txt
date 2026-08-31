@@ -1,0 +1,11 @@
+# RAG 测评胶水层依赖 (engines/ragas, 双后端 lightrag/ragflow)
+# 装到项目根 .venv-ragas:  python -m venv .venv-ragas && .venv-ragas/bin/pip install -r engines/ragas/requirements.txt
+ragas==0.4.3
+langchain-openai>=0.3
+langchain-community<0.4   # ragas 0.4.3 引用了 vertexai 模块, 0.4 起被移除
+openai>=1.99
+httpx>=0.27
+pycryptodomex>=3.20       # ragflow 登录密码 RSA 加密(公钥内置镜像, 见 scripts/retrieve.py)
+rapidfuzz>=3.9            # ragas 字符串相似度
+rouge-score>=0.1.2        # rougeL 本地计算
+sacrebleu>=2.4            # bleu / chrf 本地计算

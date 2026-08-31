@@ -1,0 +1,261 @@
+# 测评聚合平台全家桶:
+#   eval-platform   平台本体 (8800)
+#   agent-mingzhu   名著智能体 deepagents + 名著RAG工具 (8820, 红队靶机)
+#   rag-mingzhu     名著RAG lightrag-server (9621, WebUI /webui)
+#   langfuse 全家桶  --profile langfuse 启动 (3000, 轨迹本地部署替代云端)
+# 快捷命令:
+#   docker compose up -d --build                    # 平台+智能体+RAG
+#   docker compose --profile langfuse up -d         # 加上本地 Langfuse
+#   docker compose --profile langfuse down          # 只停 langfuse
+
+x-no-proxy: &no-proxy # 清空 Docker Desktop 注入的代理(127.0.0.1 代理容器内够不着, 只会超时)
+  http_proxy: ""
+  https_proxy: ""
+  HTTP_PROXY: ""
+  HTTPS_PROXY: ""
+
+services:
+  eval-platform:
+    build:
+      context: .
+      args: *no-proxy
+    image: eval-platform:latest
+    container_name: eval-platform
+    restart: unless-stopped
+    environment:
+      <<: *no-proxy
+      TZ: Asia/Shanghai
+      # Langfuse UI 直链(轨迹详情"打开完整版"): 公网子域, 本机/外网都可达
+      LANGFUSE_UI_URL: https://langfuse.h3comfyui.art
+      # harbor 任务容器的 bind-mount 源路径(须宿主/容器同路径, 见 volumes 里的同路径挂载)
+      TBENCH_JOBS_DIR: ${PWD}/runs/tbench/jobs
+      # 红队靶机指向名著智能体 (平台原默认 127.0.0.1:8820 是 rag-eval 的服务)
+      AGENT_SVC_URL: http://agent-mingzhu:8820
+      # RAG 测评双后端的服务地址 (容器内视角): lightrag 走本 compose 网络,
+      # ragflow 栈与 MLX 推理跑在宿主机 → host.docker.internal
+      RAG_LIGHT_URL: http://rag-mingzhu:9621
+      RAGFLOW_URL: http://host.docker.internal:8180
+      EVAL_EMB_URL: http://host.docker.internal:7997/v1
+    ports:
+      - "8800:8800"
+      # harbor view 官方轨迹浏览器(🏁智能体基准页「🔍 harbor view」拉起, 端口段与后端 _tbview_port 对齐)
+      - "8080-8089:8080-8089"
+    volumes:
+      - ./.env:/app/.env
+      - ./module_config.json:/app/module_config.json
+      - ./langfuse/langfuse.env:/app/langfuse/langfuse.env
+      - ./runs:/app/runs
+      - ./engines/promptfoo/cases.json:/app/engines/promptfoo/cases.json
+      # RAG 胶水层产物(题集/答卷/分数/日志)落宿主机, 重建容器不丢; scripts 也挂载, 改胶水免重建
+      - ./engines/ragas/data:/app/engines/ragas/data
+      - ./engines/ragas/results:/app/engines/ragas/results
+      - ./engines/ragas/logs:/app/engines/ragas/logs
+      - ./engines/ragas/scripts:/app/engines/ragas/scripts
+      # 智能体测评引擎(DeepEval): 脚本挂载可热改; 产物落 runs/agenteval(随 ./runs 挂载)
+      - ./engines/deepeval:/app/engines/deepeval
+      # 智能体基准引擎(TB2/Harbor): 脚本热改 + 任务容器经宿主机 daemon 起(兄弟容器)
+      - ./engines/tbench:/app/engines/tbench
+      - /var/run/docker.sock:/var/run/docker.sock
+      # harbor 生成的任务容器会 bind-mount jobs 目录的绝对路径; 宿主 daemon 只认宿主机路径 →
+      # 把宿主机路径原样挂进容器(同路径), 配合 TBENCH_JOBS_DIR 让 harbor 用宿主绝对路径
+      - ${PWD}/runs/tbench/jobs:${PWD}/runs/tbench/jobs
+      # 任务容器共享 pip 轮子缓存(同路径策略): 判分器/智能体的重复大包下载只痛一次
+      - ${PWD}/runs/tbench/pipcache:${PWD}/runs/tbench/pipcache
+      - ./static:/app/static
+      - ./app.py:/app/app.py
+    depends_on:
+      - agent-mingzhu
+
+  agent-mingzhu:
+    build:
+      context: ./agents/mingzhu-agent
+      args: *no-proxy
+    image: eval-agent-mingzhu:latest
+    container_name: agent-mingzhu
+    restart: unless-stopped
+    environment:
+      <<: *no-proxy
+      AGENT_MODEL: ${AGENT_MODEL:-gpt-4o-mini}
+      RAG_URL: http://rag-mingzhu:9621
+      # langchain 旧变量名兜底, 保证 openai 端点生效
+      OPENAI_API_BASE: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
+    env_file:
+      - .env
+      - langfuse/langfuse.env   # 配了 key 即自动开启轨迹上报(本地 langfuse)
+    ports:
+      - "8820:8820"
+    volumes:
+      # 任务集热改 + 工作区/长期记忆落宿主机(终态核验的证据, 重建容器不丢)
+      # module_config.json: ⚙️ 模型设置热改(改完在平台点「🔄 重启服务」即生效)
+      - ./agents/mingzhu-agent/tasks.jsonl:/app/tasks.jsonl
+      - ./agents/mingzhu-agent/workspace:/app/workspace
+      - ./module_config.json:/app/module_config.json
+    depends_on:
+      - rag-mingzhu
+
+  rag-mingzhu:
+    build:
+      context: ./rag/mingzhu-rag
+      args: *no-proxy
+    image: eval-rag-mingzhu:latest
+    container_name: rag-mingzhu
+    restart: unless-stopped
+    environment:
+      <<: *no-proxy
+      LLM_BINDING: openai
+      LLM_BINDING_HOST: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
+      LLM_BINDING_API_KEY: ${OPENAI_API_KEY:-}
+      LLM_MODEL: ${RAG_LLM_MODEL:-gpt-4o-mini}
+      # embedding/rerank 走宿主机 MLX 服务 (Metal GPU); 容器经 host.docker.internal 访问
+      EMBEDDING_BINDING: openai
+      EMBEDDING_BINDING_HOST: ${EMBEDDING_BINDING_HOST:-http://host.docker.internal:7997/v1}
+      EMBEDDING_BINDING_API_KEY: ${EMBEDDING_BINDING_API_KEY:-local}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-mlx-community/bge-m3-mlx-fp16}
+      EMBEDDING_DIM: ${EMBEDDING_DIM:-1024}
+      # 重排: jina 格式 → MLX 服务 /rerank (LightRAG 的 HOST 传完整端点 URL)
+      RERANK_BINDING: ${RERANK_BINDING:-jina}
+      RERANK_BINDING_HOST: ${RERANK_BINDING_HOST:-http://host.docker.internal:7997/rerank}
+      RERANK_BINDING_API_KEY: ${RERANK_API_KEY:-local}
+      RERANK_MODEL: ${RERANK_MODEL:-mlx-community/Qwen3-Reranker-0.6B-4bit}
+      # 智谱 coding 端点 QPS 低(项目 DEPLOY.md 实测踩坑): 并发 2 + 超时 600s,
+      # 思考型模型抽取单个 chunk 可能要数分钟
+      MAX_ASYNC: 2
+      TIMEOUT: 600
+      EXTRACT_MAX_ASYNC_LLM: 2
+      EXTRACT_LLM_TIMEOUT: 600
+    ports:
+      - "9621:9621"
+    volumes:
+      - ./rag/mingzhu-rag/rag_storage:/app/rag_storage
+      - ./rag/mingzhu-rag/corpus:/app/corpus
+
+  # ================= Langfuse v3 本地部署 (docker compose --profile langfuse up -d) =================
+  langfuse-web:
+    image: docker.io/langfuse/langfuse:3
+    profiles: ["langfuse"]
+    restart: always
+    depends_on: &lf-depends
+      lf-postgres: {condition: service_healthy}
+      lf-minio: {condition: service_healthy}
+      lf-redis: {condition: service_healthy}
+      lf-clickhouse: {condition: service_healthy}
+    ports:
+      - "3000:3000"
+    environment: &lf-env
+      NEXTAUTH_URL: https://langfuse.h3comfyui.art
+      NEXTAUTH_SECRET: 7f63b0cb59cbb5ac2495c63bb65c401e
+      DATABASE_URL: postgresql://postgres:postgres@lf-postgres:5432/postgres
+      SALT: 4b512606f8bc195cec236506f866baa6
+      ENCRYPTION_KEY: 378b5db3a7f9ff4c81e61b5806456dd543aede1c998cd48c80fe372a586964ae
+      TELEMETRY_ENABLED: "false"
+      CLICKHOUSE_MIGRATION_URL: clickhouse://lf-clickhouse:9000
+      CLICKHOUSE_URL: http://lf-clickhouse:8123
+      CLICKHOUSE_USER: clickhouse
+      CLICKHOUSE_PASSWORD: clickhouse
+      CLICKHOUSE_CLUSTER_ENABLED: "false"
+      LANGFUSE_S3_EVENT_UPLOAD_BUCKET: langfuse
+      LANGFUSE_S3_EVENT_UPLOAD_REGION: auto
+      LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: minio
+      LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: miniosecret
+      LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: http://lf-minio:9000
+      LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: "true"
+      LANGFUSE_S3_EVENT_UPLOAD_PREFIX: events/
+      LANGFUSE_S3_MEDIA_UPLOAD_BUCKET: langfuse
+      LANGFUSE_S3_MEDIA_UPLOAD_REGION: auto
+      LANGFUSE_S3_MEDIA_UPLOAD_ACCESS_KEY_ID: minio
+      LANGFUSE_S3_MEDIA_UPLOAD_SECRET_ACCESS_KEY: miniosecret
+      LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT: http://lf-minio:9000
+      LANGFUSE_S3_MEDIA_UPLOAD_FORCE_PATH_STYLE: "true"
+      LANGFUSE_S3_MEDIA_UPLOAD_PREFIX: media/
+      REDIS_HOST: lf-redis
+      REDIS_PORT: 6379
+      REDIS_AUTH: myredissecret
+      # 首次启动自动建 org/project/用户与 API key (与 langfuse/langfuse.env 一致)
+      LANGFUSE_INIT_ORG_ID: mingzhu-org
+      LANGFUSE_INIT_ORG_NAME: 名著测评
+      LANGFUSE_INIT_PROJECT_ID: mingzhu-proj
+      LANGFUSE_INIT_PROJECT_NAME: 名著智能体
+      LANGFUSE_INIT_PROJECT_PUBLIC_KEY: pk-lf-a45dee4db318ba8c0b1a2799fda894e3
+      LANGFUSE_INIT_PROJECT_SECRET_KEY: sk-lf-49d587ff4945d8014c5d5cb601e44d36
+      LANGFUSE_INIT_USER_EMAIL: admin@h3comfyui.art
+      LANGFUSE_INIT_USER_NAME: admin
+      LANGFUSE_INIT_USER_PASSWORD: a4869MZTKN.
+
+  langfuse-worker:
+    image: docker.io/langfuse/langfuse-worker:3
+    profiles: ["langfuse"]
+    restart: always
+    depends_on: *lf-depends
+    environment: *lf-env
+
+  lf-postgres:
+    image: docker.io/postgres:17-alpine
+    profiles: ["langfuse"]
+    restart: always
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: postgres
+    volumes:
+      - lf_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+  lf-clickhouse:
+    image: docker.io/clickhouse/clickhouse-server
+    profiles: ["langfuse"]
+    restart: always
+    user: "101:101"
+    environment:
+      CLICKHOUSE_DB: default
+      CLICKHOUSE_USER: clickhouse
+      CLICKHOUSE_PASSWORD: clickhouse
+    volumes:
+      - lf_clickhouse_data:/var/lib/clickhouse
+      - lf_clickhouse_logs:/var/log/clickhouse-server
+    healthcheck:
+      test: wget --no-verbose --tries=1 --spider http://localhost:8123/ping || exit 1
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 1s
+
+  lf-minio:
+    image: docker.io/minio/minio
+    profiles: ["langfuse"]
+    restart: always
+    entrypoint: sh
+    command: -c 'mkdir -p /data/langfuse && minio server --address ":9000" --console-address ":9001" /data'
+    environment:
+      MINIO_ROOT_USER: minio
+      MINIO_ROOT_PASSWORD: miniosecret
+    volumes:
+      - lf_minio_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 3s
+      timeout: 5s
+      retries: 10
+
+  lf-redis:
+    image: docker.io/redis:7-alpine
+    profiles: ["langfuse"]
+    restart: always
+    command: --requirepass myredissecret --maxmemory-policy noeviction
+    volumes:
+      - lf_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "myredissecret", "ping"]
+      interval: 3s
+      timeout: 10s
+      retries: 10
+
+volumes:
+  lf_postgres_data:
+  lf_clickhouse_data:
+  lf_clickhouse_logs:
+  lf_minio_data:
+  lf_redis_data:

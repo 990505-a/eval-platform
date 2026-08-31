@@ -1,0 +1,122 @@
+# RAGFlow v0.27 (精简单机栈) —— 与 LightRAG 对比用, 同样的 MLX embedding/rerank
+# 启动: docker compose -f rag/ragflow/docker-compose.yml -p eval-platform-ragflow up -d
+# Web:  http://localhost:8180  (首次启动 ES 初始化约 1-2 分钟)
+# 只发布 8180, 其余服务全部内部通信(与平台/langfuse 栈零端口冲突)
+services:
+  ragflow:
+    image: docker.io/infiniflow/ragflow:v0.27.0
+    restart: unless-stopped
+    depends_on:
+      ragflow-es01: {condition: service_healthy}
+      ragflow-mysql: {condition: service_healthy}
+      ragflow-minio: {condition: service_healthy}
+      ragflow-redis: {condition: service_healthy}
+    ports:
+      - "8180:80"
+    environment: &ragflow-env
+      API_PROXY_SCHEME: python   # 关键: 缺省时 python/go 两个 server 分支都不启动
+      # 清空 Docker Desktop 注入的代理: 访问宿主机 MLX(7997) 会被甩到够不着的代理上 (502)
+      http_proxy: ""
+      https_proxy: ""
+      HTTP_PROXY: ""
+      HTTPS_PROXY: ""
+      no_proxy: "host.docker.internal,localhost,127.0.0.1"
+      NO_PROXY: "host.docker.internal,localhost,127.0.0.1"
+      DOC_ENGINE: elasticsearch
+      ES_HOST: ragflow-es01
+      ES_PORT: "1200"
+      ELASTIC_PASSWORD: infini_rag_flow
+      DB_TYPE: mysql
+      MYSQL_HOST: ragflow-mysql
+      MYSQL_PORT: "3306"
+      MYSQL_PASSWORD: infini_rag_flow
+      MYSQL_DBNAME: rag_flow
+      MINIO_HOST: ragflow-minio
+      MINIO_PORT: "9000"
+      MINIO_USER: rag_flow
+      MINIO_PASSWORD: infini_rag_flow
+      REDIS_HOST: ragflow-redis
+      REDIS_PORT: "6379"
+      REDIS_PASSWORD: infini_rag_flow
+      SVR_HTTP_PORT: "9380"
+      REGISTER_ENABLED: "1"
+      TZ: Asia/Shanghai
+    volumes:
+      - ragflow_logs:/ragflow/logs
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  ragflow-es01:
+    image: docker.io/elasticsearch:8.11.3
+    restart: unless-stopped
+    environment:
+      - node.name=es01
+      - ELASTIC_PASSWORD=infini_rag_flow
+      - bootstrap.memory_lock=false
+      - discovery.type=single-node
+      - xpack.security.enabled=true
+      - xpack.security.http.ssl.enabled=false
+      - xpack.security.transport.ssl.enabled=false
+      - ES_JAVA_OPTS=-Xms1g -Xmx1g
+    volumes:
+      - ragflow_esdata:/usr/share/elasticsearch/data
+    mem_limit: 3g
+    healthcheck:
+      test: ["CMD-SHELL", "curl http://localhost:9200"]
+      interval: 10s
+      timeout: 10s
+      retries: 120
+
+  ragflow-mysql:
+    image: docker.io/mysql:8.0.40
+    restart: unless-stopped
+    environment:
+      - MYSQL_ROOT_PASSWORD=infini_rag_flow
+    command:
+      --max_connections=1000
+      --character-set-server=utf8mb4
+      --collation-server=utf8mb4_unicode_ci
+      --default-authentication-plugin=mysql_native_password
+      --init-file /data/application/init.sql
+    volumes:
+      - ragflow_mysql_data:/var/lib/mysql
+      - ./init.sql:/data/application/init.sql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-uroot", "-pinfini_rag_flow"]
+      interval: 10s
+      timeout: 10s
+      retries: 120
+
+  ragflow-minio:
+    image: docker.io/minio/minio
+    restart: unless-stopped
+    command: ["server", "--console-address", ":9001", "/data"]
+    environment:
+      - MINIO_ROOT_USER=rag_flow
+      - MINIO_ROOT_PASSWORD=infini_rag_flow
+    volumes:
+      - ragflow_minio_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 10s
+      retries: 120
+
+  ragflow-redis:
+    image: docker.io/valkey/valkey:8
+    restart: unless-stopped
+    command: ["redis-server", "--requirepass", "infini_rag_flow", "--maxmemory", "128mb", "--maxmemory-policy", "volatile-lru"]
+    volumes:
+      - ragflow_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "infini_rag_flow", "ping"]
+      interval: 10s
+      timeout: 10s
+      retries: 120
+
+volumes:
+  ragflow_esdata:
+  ragflow_mysql_data:
+  ragflow_minio_data:
+  ragflow_redis_data:
+  ragflow_logs:

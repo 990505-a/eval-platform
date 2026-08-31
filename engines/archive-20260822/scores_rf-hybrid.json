@@ -1,0 +1,24 @@
+{
+  "mode": "rf-hybrid",
+  "n": 6,
+  "scores": {
+    "answer_correctness": 0.4941,
+    "answer_relevancy": 0.6326,
+    "bleu": 0.0,
+    "chrf": 0.1228,
+    "context_entity_recall": 0.3934,
+    "context_precision": 0.4722,
+    "context_recall": 0.5583,
+    "exact_match": 0.0,
+    "factual_correctness": 0.2217,
+    "faithfulness": 0.7673,
+    "response_groundedness": 0.875,
+    "rougeL": 0.0,
+    "rubric_accuracy": 3.5,
+    "rubric_completeness": 3.3333,
+    "rubric_grounding": 4.3333,
+    "semantic_similarity": 0.8515,
+    "string_similarity": 0.0927
+  },
+  "ts": "2026-08-22 00:36:33"
+}

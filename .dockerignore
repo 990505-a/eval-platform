@@ -1,0 +1,12 @@
+.venv-platform
+.venv-opencompass
+node_modules
+runs/llm/work
+agents
+rag
+langfuse
+*.zip
+__pycache__
+**/__pycache__
+.DS_Store
+.venv-ragas

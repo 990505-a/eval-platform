@@ -1,0 +1,24 @@
+{
+  "mode": "rf-vector",
+  "n": 6,
+  "scores": {
+    "answer_correctness": 0.399,
+    "answer_relevancy": 0.6936,
+    "bleu": 0.0,
+    "chrf": 0.0983,
+    "context_entity_recall": 0.348,
+    "context_precision": 0.3528,
+    "context_recall": 0.4048,
+    "exact_match": 0.0,
+    "factual_correctness": 0.165,
+    "faithfulness": 0.9641,
+    "response_groundedness": 0.9583,
+    "rougeL": 0.0,
+    "rubric_accuracy": 3.0,
+    "rubric_completeness": 2.5,
+    "rubric_grounding": 4.1667,
+    "semantic_similarity": 0.8471,
+    "string_similarity": 0.0785
+  },
+  "ts": "2026-08-22 01:41:05"
+}
