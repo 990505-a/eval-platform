@@ -1,10 +1,11 @@
 # 测评聚合平台全家桶:
 #   eval-platform   平台本体 (8800)
-#   agent-mingzhu   名著智能体 deepagents + 名著RAG工具 (8820, 红队靶机)
 #   rag-mingzhu     名著RAG lightrag-server (9621, WebUI /webui)
 #   langfuse 全家桶  --profile langfuse 启动 (3000, 轨迹本地部署替代云端)
+# 被测智能体不再内置: 在智能体页「接入指南」接入你自己的智能体服务
+#   (平台默认找 http://127.0.0.1:8820, 可用 AGENT_SVC_URL 环境变量或在页面里改)
 # 快捷命令:
-#   docker compose up -d --build                    # 平台+智能体+RAG
+#   docker compose up -d --build                    # 平台+RAG
 #   docker compose --profile langfuse up -d         # 加上本地 Langfuse
 #   docker compose --profile langfuse down          # 只停 langfuse
 
@@ -26,11 +27,12 @@ services:
       <<: *no-proxy
       TZ: Asia/Shanghai
       # Langfuse UI 直链(轨迹详情"打开完整版"): 公网子域, 本机/外网都可达
-      LANGFUSE_UI_URL: https://langfuse.h3comfyui.art
+      LANGFUSE_UI_URL: ${LF_UI_URL:-http://localhost:3000}
       # harbor 任务容器的 bind-mount 源路径(须宿主/容器同路径, 见 volumes 里的同路径挂载)
       TBENCH_JOBS_DIR: ${PWD}/runs/tbench/jobs
-      # 红队靶机指向名著智能体 (平台原默认 127.0.0.1:8820 是 rag-eval 的服务)
-      AGENT_SVC_URL: http://agent-mingzhu:8820
+      # 被测智能体地址(自定义智能体测评 + 红队靶机): 默认宿主机上的智能体服务;
+      # 你的智能体也用 compose 跑时改成 compose 网络名, 如 http://my-agent:8820
+      AGENT_SVC_URL: ${AGENT_SVC_URL:-http://host.docker.internal:8820}
       # RAG 测评双后端的服务地址 (容器内视角): lightrag 走本 compose 网络,
       # ragflow 栈与 MLX 推理跑在宿主机 → host.docker.internal
       RAG_LIGHT_URL: http://rag-mingzhu:9621
@@ -46,6 +48,9 @@ services:
       - ./langfuse/langfuse.env:/app/langfuse/langfuse.env
       - ./runs:/app/runs
       - ./engines/promptfoo/cases.json:/app/engines/promptfoo/cases.json
+      # LLM 自有题库: 上传的业务素材与正式题库持久化, 重建容器不丢
+      - ./engines/opencompass/data/own_seeds:/app/engines/opencompass/data/own_seeds
+      - ./engines/opencompass/data/own/own.jsonl:/app/engines/opencompass/data/own/own.jsonl
       # RAG 胶水层产物(题集/答卷/分数/日志)落宿主机, 重建容器不丢; scripts 也挂载, 改胶水免重建
       - ./engines/ragas/data:/app/engines/ragas/data
       - ./engines/ragas/results:/app/engines/ragas/results
@@ -63,35 +68,6 @@ services:
       - ${PWD}/runs/tbench/pipcache:${PWD}/runs/tbench/pipcache
       - ./static:/app/static
       - ./app.py:/app/app.py
-    depends_on:
-      - agent-mingzhu
-
-  agent-mingzhu:
-    build:
-      context: ./agents/mingzhu-agent
-      args: *no-proxy
-    image: eval-agent-mingzhu:latest
-    container_name: agent-mingzhu
-    restart: unless-stopped
-    environment:
-      <<: *no-proxy
-      AGENT_MODEL: ${AGENT_MODEL:-gpt-4o-mini}
-      RAG_URL: http://rag-mingzhu:9621
-      # langchain 旧变量名兜底, 保证 openai 端点生效
-      OPENAI_API_BASE: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
-    env_file:
-      - .env
-      - langfuse/langfuse.env   # 配了 key 即自动开启轨迹上报(本地 langfuse)
-    ports:
-      - "8820:8820"
-    volumes:
-      # 任务集热改 + 工作区/长期记忆落宿主机(终态核验的证据, 重建容器不丢)
-      # module_config.json: ⚙️ 模型设置热改(改完在平台点「🔄 重启服务」即生效)
-      - ./agents/mingzhu-agent/tasks.jsonl:/app/tasks.jsonl
-      - ./agents/mingzhu-agent/workspace:/app/workspace
-      - ./module_config.json:/app/module_config.json
-    depends_on:
-      - rag-mingzhu
 
   rag-mingzhu:
     build:
@@ -142,11 +118,12 @@ services:
     ports:
       - "3000:3000"
     environment: &lf-env
-      NEXTAUTH_URL: https://langfuse.h3comfyui.art
-      NEXTAUTH_SECRET: 7f63b0cb59cbb5ac2495c63bb65c401e
+      # 密钥一律经 .env 的 LF_* 变量注入(模板见 .env.example), 不入库存
+      NEXTAUTH_URL: ${LF_NEXTAUTH_URL:-http://localhost:3000}
+      NEXTAUTH_SECRET: ${LF_NEXTAUTH_SECRET}
       DATABASE_URL: postgresql://postgres:postgres@lf-postgres:5432/postgres
-      SALT: 4b512606f8bc195cec236506f866baa6
-      ENCRYPTION_KEY: 378b5db3a7f9ff4c81e61b5806456dd543aede1c998cd48c80fe372a586964ae
+      SALT: ${LF_SALT}
+      ENCRYPTION_KEY: ${LF_ENCRYPTION_KEY}
       TELEMETRY_ENABLED: "false"
       CLICKHOUSE_MIGRATION_URL: clickhouse://lf-clickhouse:9000
       CLICKHOUSE_URL: http://lf-clickhouse:8123
@@ -175,11 +152,11 @@ services:
       LANGFUSE_INIT_ORG_NAME: 名著测评
       LANGFUSE_INIT_PROJECT_ID: mingzhu-proj
       LANGFUSE_INIT_PROJECT_NAME: 名著智能体
-      LANGFUSE_INIT_PROJECT_PUBLIC_KEY: pk-lf-a45dee4db318ba8c0b1a2799fda894e3
-      LANGFUSE_INIT_PROJECT_SECRET_KEY: sk-lf-49d587ff4945d8014c5d5cb601e44d36
+      LANGFUSE_INIT_PROJECT_PUBLIC_KEY: ${LF_PUBLIC_KEY}
+      LANGFUSE_INIT_PROJECT_SECRET_KEY: ${LF_SECRET_KEY}
       LANGFUSE_INIT_USER_EMAIL: admin@h3comfyui.art
       LANGFUSE_INIT_USER_NAME: admin
-      LANGFUSE_INIT_USER_PASSWORD: a4869MZTKN.
+      LANGFUSE_INIT_USER_PASSWORD: ${LF_ADMIN_PASSWORD}
 
   langfuse-worker:
     image: docker.io/langfuse/langfuse-worker:3

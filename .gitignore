@@ -31,3 +31,8 @@ rag/mlx-models/
 rag/mingzhu-rag/rag_storage/
 # 工具脚本日志
 scripts/*.log
+# 密钥文件(本地 Langfuse 接入配置)
+langfuse/langfuse.env
+# 用户上传的出题素材与题库备份(业务资料不入库)
+engines/opencompass/data/own_seeds/*
+engines/deepeval/tasks/*.bak-*

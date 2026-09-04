@@ -58,9 +58,12 @@ def read_jsonl(p: Path) -> list:
     return out
 
 
-def pick_seed_blocks(n: int) -> list[tuple[str, str]]:
-    """每个种子文件抽一块 800-4000 字的材料 (文件名, 材料文本), 打散返回."""
-    files = [f for f in SEEDS.glob("*") if f.suffix.lower() in (".txt", ".md") and f.stat().st_size > 200]
+def pick_seed_blocks(n: int, selected: list[str] | None = None) -> list[tuple[str, str]]:
+    """从指定或全部种子文件各抽一块 800-4000 字材料."""
+    allowed = set(selected or [])
+    files = [f for f in SEEDS.glob("*")
+             if f.is_file() and f.suffix.lower() in (".txt", ".md") and f.stat().st_size > 200
+             and (not allowed or f.name in allowed)]
     if not files:
         return []
     blocks = []
@@ -97,15 +100,15 @@ PROMPT = """下面是一段业务领域的材料。请依据这段材料出 {n} 
 {chunk}"""
 
 
-def llm_generate(n: int) -> list[dict]:
+def llm_generate(n: int, selected: list[str] | None = None) -> list[dict]:
     key = os.environ.get("OPENAI_API_KEY", "")
     base = _env("OPENAI_BASE_URL", "https://api.openai.com/v1")
     model = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
     if not key:
         sys.exit("[synth-bench] 缺 OPENAI_API_KEY (平台 .env 或 ⚙️ 设置/llm 模块)")
-    blocks = pick_seed_blocks(n)
+    blocks = pick_seed_blocks(n, selected)
     if not blocks:
-        sys.exit(f"[synth-bench] 种子目录没有可用语料: {SEEDS} (放 .txt/.md 业务文档)")
+        sys.exit(f"[synth-bench] 没有可用的指定素材: {SEEDS}")
     print(f"[synth-bench] 从 {len(blocks)} 个种子文件抽材料, 模型 {model}, 出 {n} 题", flush=True)
     items, seen = [], set()
     for fname, chunk in blocks:
@@ -172,8 +175,10 @@ def main():
     if SELFTEST:
         selftest()
         return
-    n = max(1, min(20, int(sys.argv[1]) if len(sys.argv) > 1 and sys.argv[1].isdigit() else 5))
-    items = llm_generate(n)
+    args = [a for a in sys.argv[1:] if a != "--files"]
+    n = max(1, min(20, int(args[0]) if args and args[0].isdigit() else 5))
+    selected = sys.argv[sys.argv.index("--files") + 1:] if "--files" in sys.argv else None
+    items = llm_generate(n, selected)
     if not items:
         sys.exit("[synth-bench] 一题都没生成成功, 看上方日志")
     write_pending(items)

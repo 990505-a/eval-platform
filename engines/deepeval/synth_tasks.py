@@ -8,8 +8,8 @@
 约定 (与 ragas 的 synth_questions.py 同构):
 - 待审区 runs/agenteval/tasks_synth.jsonl, 追加式 + id 续号 + 原子写
 - 每行: {id, instruction, expect_tools, expect_answer_contains, expect_file,
-         expect_memory_contains, rationale}    # 四个 expect_* 字段名是 server.py→run_tasks→evaluate 全链契约
-- 采纳后由平台写入正式任务集 agents/mingzhu-agent/tasks.jsonl (AGENT_TASKS_FILE 可覆盖)
+         expect_file_contains:{file,text}, rationale}    # expect_* 字段名是全链契约
+- 采纳后由平台写入正式任务集 engines/deepeval/tasks/default.jsonl (AGENT_TASKS_FILE 可覆盖)
 - expect_tools 只保留 task_seeds.md 工具清单里登记过的名字(非法工具名的任务直接丢弃)
 - 进度一律 print("[synth-tasks] ...", flush=True), 日志落 runs/agent_tasksynth.log
 """
@@ -28,7 +28,7 @@ SEEDS = HERE / "task_seeds.md"
 RUNS = ROOT / "runs" / "agenteval"
 PENDING = RUNS / "tasks_synth.jsonl"
 TASKS_FILE = Path(os.environ.get("AGENT_TASKS_FILE")
-                  or ROOT / "agents" / "mingzhu-agent" / "tasks.jsonl")
+                  or HERE / "tasks" / "default.jsonl")
 
 SELFTEST = "--selftest" in sys.argv
 
@@ -77,9 +77,9 @@ def few_shot() -> str:
     tasks = read_jsonl(TASKS_FILE)[:3]
     if not tasks:
         return "(暂无示例任务)"
-    return "\n".join(json.dumps({k: t.get(k) for k in
-                                 ("instruction", "expect_tools", "expect_answer_contains",
-                                  "expect_file", "expect_memory_contains") if t.get(k)},
+    keys = ("instruction", "expect_tools", "expect_answer_contains",
+            "expect_file", "expect_file_contains")
+    return "\n".join(json.dumps({k: t.get(k) for k in keys if t.get(k)},
                                 ensure_ascii=False) for t in tasks)
 
 
@@ -99,10 +99,11 @@ PROMPT = """你要为一个智能体生成评测任务。该智能体的可用�
 2. expect_tools 只能从工具清单的名字里选(数组, 1-3 个, 按必要顺序); 指令需要什么就标什么
 3. 尽量带可判定的终态锚点: expect_answer_contains(回答必含的关键词数组, 2-4 个短词)、
    expect_file(指令要求产出的文件名, 仅当指令明确要求写文件时)、
-   expect_memory_contains(要求写入长期记忆的关键词, 仅当指令是记忆型时)——没有把握的字段直接省略, 不要硬凑
-4. 任务类型多样化: 单检索型 / 检索+写文件组合型 / 记忆型 / 读文件综合型
+   expect_file_contains(对象 {{"file": 路径, "text": 该文件须包含的关键词}}, 仅当指令要求
+   把特定内容写入某个文件/记忆时)——没有把握的字段直接省略, 不要硬凑
+4. 任务类型多样化: 单检索型 / 检索+写文件组合型 / 写入记忆型 / 读文件综合型
 5. rationale 一句话说明这道题考什么(审核用)
-6. 只输出 JSON 数组, 不要解释: [{{"instruction": "...", "expect_tools": ["..."], "expect_answer_contains": ["..."], "expect_file": "...", "expect_memory_contains": "...", "rationale": "..."}}]"""
+6. 只输出 JSON 数组, 不要解释: [{{"instruction": "...", "expect_tools": ["..."], "expect_answer_contains": ["..."], "expect_file": "...", "expect_file_contains": {{"file": "...", "text": "..."}}, "rationale": "..."}}]"""
 
 
 def _norm_task(t: dict, valid_tools: list[str]) -> dict | None:
@@ -116,10 +117,13 @@ def _norm_task(t: dict, valid_tools: list[str]) -> dict | None:
     kws = [str(x).strip() for x in (t.get("expect_answer_contains") or []) if str(x).strip()]
     if kws:
         out["expect_answer_contains"] = kws[:4]
-    for k in ("expect_file", "expect_memory_contains"):
-        v = str(t.get(k) or "").strip()
-        if v:
-            out[k] = v
+    v = str(t.get("expect_file") or "").strip()
+    if v:
+        out["expect_file"] = v
+    fc = t.get("expect_file_contains")
+    if isinstance(fc, dict) and fc.get("file") and fc.get("text"):
+        out["expect_file_contains"] = {"file": str(fc["file"]).strip(),
+                                       "text": str(fc["text"]).strip()}
     if str(t.get("rationale") or "").strip():
         out["rationale"] = str(t["rationale"]).strip()[:120]
     return out
@@ -183,11 +187,11 @@ def write_pending(items: list[dict]):
 
 def selftest():
     write_pending([
-        {"instruction": "(自测)检索'武松打虎'的原文, 回答时引用一句原文。",
-         "expect_tools": ["search_classics"], "expect_answer_contains": ["武松"],
+        {"instruction": "(自测)检索'量子计算'的最新进展, 回答时引用一句资料。",
+         "expect_tools": ["web_search"], "expect_answer_contains": ["量子"],
          "rationale": "自测: 单检索型"},
-        {"instruction": "(自测)调查'三顾茅庐'情节, 把结论写入工作区文件 三顾茅庐调查.md。",
-         "expect_tools": ["search_classics", "write_file"], "expect_file": "三顾茅庐调查.md",
+        {"instruction": "(自测)调查'可再生能源'现状, 把结论写入工作区文件 可再生能源报告.md。",
+         "expect_tools": ["web_search", "write_file"], "expect_file": "可再生能源报告.md",
          "rationale": "自测: 检索+写文件组合型"},
     ])
     print(f"[synth-tasks] selftest 完成: 2 条已写入待审区 {PENDING}", flush=True)

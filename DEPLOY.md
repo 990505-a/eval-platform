@@ -47,15 +47,16 @@ Docker Desktop 注入的代理（若宿主机代理只监听 127.0.0.1，注入�
 ### 0.1 被测基础设施（本仓库自带）
 
 ```
-agents/mingzhu-agent/   名著智能体 (deepagents + search_classics 工具)  → localhost:8820
 rag/mingzhu-rag/        名著RAG (lightrag-hku, 四大名著+莎士比亚全集)   → localhost:9621 (WebUI /webui)
 rag/ragflow/            对比RAG (RAGFlow v0.27 + ES, 同样的 MLX 模型)   → localhost:8180
 rag/mlx-models/         MLX 本地推理: embedding(bge-m3)+rerank(Qwen3)   → localhost:7997 (宿主机原生, Metal)
-langfuse/langfuse.env   本地 Langfuse 接入配置 (平台与智能体共用)
+langfuse/langfuse.env   本地 Langfuse 接入配置 (平台与被测智能体共用)
 ```
 
-`docker compose up -d --build` 会同时启动这三个服务（agent 容器随 `.env` 配置模型；
-红队页的靶机已通过 `AGENT_SVC_URL` 指向名著智能体）。
+**被测智能体不再内置**（2026-09 重构）：自定义智能体测评与红队扫描的靶机是
+**你自己的智能体服务**——按平台「🤖 智能体测评 → ② 讲解 · 接入指南」实现 HTTP 契约
+（POST /run 必须, /files /file /chat 可选, 指南里有 50 行参考实现）, 起在宿主机任意端口,
+然后在平台页签里填地址(默认 `http://127.0.0.1:8820`, Docker 部署用 `AGENT_SVC_URL` 覆盖)。
 **MLX 服务跑在宿主机**（不在 Docker 里）：`cd rag/mlx-models && ./start.sh`，Mac 重启后需手动启一次；
 embedding/rerank 因此零 API 费用，LLM（建图/对话）仍走云端 key。
 
@@ -80,8 +81,9 @@ docker compose exec rag-mingzhu python ingest.py               # 全量
 docker compose --profile langfuse up -d   # 首次拉镜像较久; postgres/clickhouse/minio/redis + web/worker
 ```
 
-- 管理界面 http://localhost:3000 ，账号 `admin@mingzhu.local`（密码在 docker-compose.yml 的
-  `LANGFUSE_INIT_USER_PASSWORD`），组织/项目/API key 已通过 `LANGFUSE_INIT_*` 自动创建
+- 管理界面 http://localhost:3000 ，账号为 compose 里 `LANGFUSE_INIT_USER_EMAIL` 配置的邮箱（密码为 `.env` 的
+  `LF_ADMIN_PASSWORD`；Langfuse 全部密钥经 `.env` 的 `LF_*` 变量注入，模板见 `.env.example`），
+  组织/项目/API key 已通过 `LANGFUSE_INIT_*` 自动创建
 - 平台与智能体读 `langfuse/langfuse.env`（host 用容器网络地址 `http://langfuse-web:3000`），
   智能体配置了 key 即自动上报轨迹；平台的 ⚙️设置/Langfuse 也读这份文件
 - 不用时 `docker compose --profile langfuse down`（数据在命名卷里，不丢）
@@ -103,7 +105,7 @@ copy module_config.json.example module_config.json
 
 ```
 python -m venv .venv-platform
-.venv-platform\Scripts\pip install fastapi uvicorn httpx psutil
+.venv-platform\Scripts\pip install fastapi uvicorn httpx psutil python-multipart
 .venv-platform\Scripts\python app.py
 ```
 
@@ -178,7 +180,7 @@ python -m venv .venv-agenteval
 .venv-agenteval/bin/pip install -r engines/deepeval/requirements.txt   # Windows 为 .venv-agenteval\Scripts\pip
 ```
 
-- 被测智能体 = `agents/mingzhu-agent`（:8820, 自带任务集 `tasks.jsonl` 6 题）
+- 被测智能体 = 你自己的服务(接入契约见平台「智能体测评 → 接入指南」); 任务集在平台侧 `engines/deepeval/tasks/default.jsonl`
 - 「生成轨迹」→ run_tasks.py 逐题执行并采集文件/记忆终态证据 → `runs/agenteval/trajectories-*.jsonl`
 - 「计算指标」→ evaluate.py: DeepEval 裁判 2 项（走 ⚙️设置/模块设置-agent 的模型）+ 确定性核验 4 项
 - 零成本自测: `run_tasks.py --selftest` + `evaluate.py --selftest`（不调 API）
@@ -200,12 +202,8 @@ python -m venv .venv-ragas
 
 三层入口, 全部照 RAG 的"AI 合成 → 待审 → 人工采纳"流程, 已内置示例可直接体验:
 
-- **LLM 自有题库**(🎓 页 →「🧩 自有题库」页签): 选择题题库 `engines/opencompass/data/own/own.jsonl`,
-  网页增删或 AI 合成; 种子语料放 `engines/opencompass/data/own_seeds/`(你项目的 .txt/.md 文档),
-  合成题带材料原句锚(basis)供审核。攒好题后「成绩矩阵」页基准选「自有题库」(bench key `own`)跑分,
-  与 C-Eval 等共用模型登记与成绩矩阵。合成脚本 `engines/opencompass/synth_bench.py` 只依赖 httpx,
-  `--selftest` 零 API 验证链路。
-- **智能体任务集**(🤖 页 →「🗂 任务集」页签): 任务集 `agents/mingzhu-agent/tasks.jsonl` 在线增删
+- **LLM 自有题库**（LLM 页 →「自有题库」区域）：选择题库 `engines/opencompass/data/own/own.jsonl`，可在网页直接添加/删除题目；业务资料可直接上传 `.txt/.md`，勾选一个或多个素材后点击「生成选中」或「生成全部」；平台写入 `engines/opencompass/data/own_seeds/`，再生成待审核题目。Docker Compose 已将素材目录和 `own.jsonl` 挂载到宿主机，重建容器不会丢失。
+- **智能体任务集**(🤖 页 →「② 考题 · 任务集」页签): 任务集 `engines/deepeval/tasks/default.jsonl` 在线增删 + 单题试跑
   (服务未启动也可管理); AI 合成依据 `engines/deepeval/task_seeds.md`——「工具清单 + 领域素材」,
   **换你自己的项目改这份文件即可**; 合成任务带 expect_tools/expect_file/expect_memory_contains
   等标注与审核理由, 采纳后进正式任务集, 「📏 自家打分」测的就是它。建议新任务先在「体验」页单题试跑确认可解。
@@ -230,15 +228,25 @@ python -m venv .venv-ragas
 
 ```
 app.py                     平台后端（全部 API）
-static/index.html          前端单文件（hash 路由, 8 页面）
+static/index.html          前端单文件（操作页）
+static/skill/eval-platform-guide/  可下载的 AI 使用 Skill
 DEPLOY.md                  本文件
-PLAN.md                    设计文档（模块分工/里程碑/约定）
-metrics_dict.json          指标词典（前端📖页数据源）
+PLAN.md                    设计文档（模块分工/约定）
+metrics_dict.json          引擎指标原始词典（前端不作为主入口）
 module_config.json.example 各模块模型配置模板
 .env.example               平台默认密钥模板
-engines/opencompass/       OpenCompass 编排脚本 + 本地化数据集(35M) + lite 配置
-engines/deepeval/          智能体轨迹质量引擎(任务跑批/双口径评分/Langfuse 抽样评分)
-engines/tbench/            智能体基准引擎(Terminal-Bench 2 × Harbor)
+engines/opencompass/       OpenCompass 编排脚本 + 本地化数据集
+engines/deepeval/          外部智能体任务跑批与评分
+engines/tbench/            Harbor 通用智能体基准
 engines/promptfoo/         红队攻击用例库
-runs/                      运行产物（成绩矩阵/历史/归档, 附示例）
+runs/                      运行产物（本地生成）
 ```
+
+## AI 使用 Skill
+
+平台智能体页“接入”面板提供 `eval-platform-guide` 下载入口（页面内不再设指引页，操作指引统一通过该 Skill 提供）：
+
+- `/static/skill/eval-platform-guide/SKILL.md`
+- `/static/skill/eval-platform-guide/README.md`
+
+该 Skill 不包含密钥或运行数据，安装后可让 AI 指导平台部署、配置、运行评测和排障。

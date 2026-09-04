@@ -2,11 +2,11 @@
 """对话轨迹抽样评分: Langfuse 拉轨迹 → DeepEval 打分 → 分数写回 Langfuse
 
 官方 cookbook 的三步模式落地 ("Langfuse captures, DeepEval scores"):
-  ① GET  {host}/api/public/traces?limit=N&orderBy=timestamp.desc   拉最近轨迹
-  ② GEval(任务完成度/帮助性) 逐条打分 (裁判走 OPENAI_* 端点)
-  ③ POST {host}/api/public/scores                                  分数+理由挂回原轨迹
+    ① GET  {host}/api/public/traces?limit=N&orderBy=timestamp.desc   拉最近轨迹
+    ② GEval(任务完成度/帮助性) 逐条打分 (裁判走共享 judge.py)
+    ③ POST {host}/api/public/scores                                  分数+理由挂回原轨迹
 
-产物: runs/agenteval/chatscores.json (平台「Langfuse 轨迹」页签展示)
+产物: runs/agenteval/chatscores.json (平台「轨迹回放」页签展示)
 环境变量: LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY / LANGFUSE_HOST (平台注入 langfuse.env)
           AGENTEVAL_CHAT_N 抽样条数(默认 5) · OPENAI_* 裁判端点
 """
@@ -18,7 +18,9 @@ from pathlib import Path
 
 import httpx
 
-HERE = Path(__file__).resolve().parent
+from judge import build_judge as _shared_judge
+
+HERE = Path(__file__).parent
 RUNS = HERE.parent.parent / "runs" / "agenteval"
 
 PK = os.environ.get("LANGFUSE_PUBLIC_KEY", "")
@@ -50,30 +52,7 @@ def fetch_traces() -> list[dict]:
 
 
 def build_judge():
-    import os
-    from deepeval.models import DeepEvalBaseLLM
-
-    model = os.environ.get("AGENTEVAL_JUDGE_MODEL") or os.environ.get("OPENAI_MODEL") or "gpt-4o-mini"
-    base = (os.environ.get("OPENAI_BASE_URL") or "https://api.openai.com/v1").rstrip("/")
-    key = os.environ.get("OPENAI_API_KEY", "")
-
-    class JudgeLLM(DeepEvalBaseLLM):
-        def load_model(self):
-            return self
-
-        def get_model_name(self):
-            return model
-
-        def generate_text(self, prompt: str) -> str:
-            r = httpx.post(f"{base}/chat/completions",
-                           headers={"Authorization": f"Bearer {key}"},
-                           json={"model": model, "temperature": 0,
-                                 "messages": [{"role": "user", "content": prompt}]},
-                           timeout=180)
-            r.raise_for_status()
-            return r.json()["choices"][0]["message"]["content"]
-
-    return JudgeLLM(), model
+    return _shared_judge()
 
 
 def main():

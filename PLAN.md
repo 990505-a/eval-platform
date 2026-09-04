@@ -9,8 +9,8 @@
 |---|---|---|---|
 | **ragas** | RAG 端到端质量 | 双后端胶水层内置(`engines/ragas`): RAGFlow(本地·rf-vector/hybrid/rerank) ⇄ LightRAG(naive/local/global/hybrid/mix/bypass) 网页可切换, 同题集共存对比; 云端 rag-eval 仍可经 `RAGAS_DIR` 指回 | M1 ✅ |
 | **OpenCompass** | 模型能力基准(知识/推理/数学) | 六大基准本地化+限题控费: 回归口径 C-Eval/CMMLU/MMLU(每子集前N题) + 前沿口径 GPQA/AIME 2025/MMLU-Pro(2026-08 换代, GSM8K/HellaSwag 因饱和退役)；模型登记 + 运行历史 | M2 ✅ |
-| **Harbor (TB2)** | 智能体任务完成度基准(线A): 容器内测试判分, 与公开榜同口径 | 内置引擎 `engines/tbench`: run_bench.py 包装 `harbor run`, 被测模型复用 LLM 页登记, oracle 预检零成本, 产物落 runs/tbench/ | M3 ✅ |
-| **DeepEval** | 智能体轨迹质量(线B): ToolCorrectness/TaskCompletion 裁判 + 确定性核验 4 项 | 内置引擎 `engines/deepeval`: run_tasks.py 跑本地任务集(agents/mingzhu-agent/tasks.jsonl)生成轨迹+终态证据 → evaluate.py 双口径评分(2026-08 从 ragas agent 指标换代, ragas 收缩回纯 RAG) | M3 ✅ |
+| **Harbor (TB2)** | 通用智能体测评(第①部分): 容器内测试判分, 与公开榜同口径 | 内置引擎 `engines/tbench`: run_bench.py 包装 `harbor run`, 被测模型复用 LLM 页登记, oracle 预检零成本, 产物落 runs/tbench/ | M3 ✅ |
+| **DeepEval** | 自定义智能体测评(第②部分): 接入你自己的智能体 → ToolCorrectness/TaskCompletion 裁判 + 确定性核验 4 项 | 内置引擎 `engines/deepeval`: run_tasks.py 按接入契约(POST /run)跑平台侧任务集(tasks/default.jsonl)生成轨迹+终态证据 → evaluate.py 双口径评分(2026-09 重构: 删除内置名著智能体, 平台零内置靶机) | M3 ✅ |
 | **Langfuse** | 智能体轨迹采集 + 线上监控 | 云端/本地 API 代理 + 轨迹本地落盘(runs/agenteval/) + DeepEval 抽样评分闭环(score_chats.py: 拉轨迹→打分→写回) | M3 ✅ |
 | **promptfoo** | 安全红队 + 用例在线配置 | 子进程跑 `promptfoo eval`(cases.json 动态生成 yaml)，解析 JSON 输出 | M4 ✅ |
 

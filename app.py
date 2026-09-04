@@ -11,13 +11,14 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from datetime import datetime
 from pathlib import Path
 
 import httpx
 import psutil
 import uvicorn
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -44,16 +45,16 @@ def discover_modes() -> tuple:
             return tuple(found)
     return ("mix", "naive")
 
-# 智能体服务 (deepagents, 端口被系统保留时用 AGENT_SVC_URL 覆盖)
-AGENT_SVC = os.environ.get("AGENT_SVC_URL", "http://127.0.0.1:8820")
-AGENT_DIR = BASE_DIR / "agents" / "mingzhu-agent"   # 本地被测智能体(对话/任务/工作区/tasks.jsonl)
+# 自定义智能体测评: 被测智能体是用户自己的外部 HTTP 服务(接入契约见 智能体页→接入指南)。
+# 地址解析: ⚙️模块设置 agent.url > 环境变量 AGENT_SVC_URL > 默认本机 8820
+AGENT_SVC_DEFAULT = os.environ.get("AGENT_SVC_URL", "http://127.0.0.1:8820")
 # 智能体评测引擎 (DeepEval): 任务跑批 + 双口径评分 + 对话抽样评分, 产物落 runs/agenteval/
 AGENTEVAL_DIR = BASE_DIR / "engines" / "deepeval"
 AGENTEVAL_RUNS = BASE_DIR / "runs" / "agenteval"
 AGENTEVAL_SCORES = AGENTEVAL_RUNS / "agent_scores.json"
 AGENTEVAL_CHATSCORES = AGENTEVAL_RUNS / "chatscores.json"
 AGENTEVAL_VENV_PY = BASE_DIR / ".venv-agenteval" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
-# 智能体基准引擎 (线A): Harbor + Terminus-2, 基准矩阵从 Harbor 注册表任选, 产物落 runs/tbench/
+# 通用智能体测评引擎 (Harbor + Terminus-2, 基准矩阵从 Harbor 注册表任选, 产物落 runs/tbench/)
 TBENCH_DIR = BASE_DIR / "engines" / "tbench"
 TBENCH_RUNS = BASE_DIR / "runs" / "tbench"
 TBENCH_HARBOR = BASE_DIR / ".venv-tbench" / ("Scripts/harbor.exe" if os.name == "nt" else "bin/harbor")
@@ -587,9 +588,9 @@ def modules():
     mods = [dict(m) for m in MODULES]
     for m in mods:
         if m["id"] == "langfuse" and _agent_up():
-            # Langfuse 状态跟随智能体服务: 启动时配了 LANGFUSE_* 即点亮
+            # Langfuse 状态跟随被测智能体: 智能体侧配了 LANGFUSE_* 上报即点亮
             try:
-                d = httpx.get(f"{AGENT_SVC}/health", timeout=3).json()
+                d = httpx.get(f"{_agent_svc()}/health", timeout=3).json()
                 m["ok"] = bool(d.get("langfuse"))
             except Exception:  # noqa: BLE001
                 pass
@@ -597,119 +598,63 @@ def modules():
 
 
 # ---------- 智能体服务(代理 + 启动) ----------
+# ---------- 自定义智能体: 外部被测服务 (状态检测 / 地址配置 / 代理) ----------
+def _agent_svc() -> str:
+    """被测智能体地址: ⚙️模块设置 agent.url > 环境变量 AGENT_SVC_URL > 默认 8820。"""
+    try:
+        c = _load_module_cfg().get("agent") or {}
+        return (c.get("url") or AGENT_SVC_DEFAULT).rstrip("/")
+    except Exception:  # noqa: BLE001
+        return AGENT_SVC_DEFAULT
+
+
 def _agent_up() -> bool:
     try:
-        httpx.get(f"{AGENT_SVC}/health", timeout=3)
+        httpx.get(f"{_agent_svc()}/health", timeout=3)
         return True
     except Exception:  # noqa: BLE001
         return False
 
 
-AGENT_CONTAINER = os.environ.get("AGENT_CONTAINER", "agent-mingzhu")
-
-
-def _docker_restart_agent() -> bool:
-    """经 docker.sock 重启智能体容器(Docker 部署时它是平台的兄弟容器; 平台本体跑宿主机时用 ~/.docker)。"""
-    for sock in (Path("/var/run/docker.sock"),
-                 Path.home() / ".docker" / "run" / "docker.sock"):
-        if not sock.exists():
-            continue
-        try:
-            with httpx.Client(transport=httpx.HTTPTransport(uds=str(sock)), timeout=60) as c:
-                r = c.post(f"http://docker/containers/{AGENT_CONTAINER}/restart?t=5")
-                return r.status_code in (200, 204)
-        except Exception:  # noqa: BLE001
-            continue
-    return False
-
-
 @app.get("/api/agent/status")
 def agent_status():
+    """被测智能体接入状态 (POST /run 契约是否在线, Langfuse 上报是否开启)。"""
+    url = _agent_svc()
     if not _agent_up():
-        return {"up": False, "langfuse": False}
-    d = httpx.get(f"{AGENT_SVC}/health", timeout=3).json()
-    return {"up": True, "langfuse": bool(d.get("langfuse"))}
+        return {"up": False, "langfuse": False, "url": url}
+    d = httpx.get(f"{url}/health", timeout=3).json()
+    return {"up": True, "langfuse": bool(d.get("langfuse")),
+            "url": url, "tools": d.get("tools") or []}
 
 
-@app.post("/api/agent/start")
-def agent_start():
-    """拉起智能体服务; 已在运行则直接返回(Docker 部署时由 agent-mingzhu 容器常驻)。"""
-    if _agent_up():
-        return {"started": False, "already_up": True}
-    server_py = AGENT_DIR / "server.py"
-    if not server_py.exists():
-        raise HTTPException(404, f"未找到 {server_py} (Docker 部署时智能体由 agent-mingzhu 容器运行)")
-    venv_py = next((p for p in (AGENT_DIR / ".venv" / "bin" / "python",
-                                AGENT_DIR / ".venv" / "Scripts" / "python.exe") if p.exists()), None)
-    if not venv_py:
-        raise HTTPException(404, "智能体 venv 不存在: cd agents/mingzhu-agent && python -m venv .venv && "
-                                 ".venv/bin/pip install deepagents langchain-openai fastapi uvicorn httpx langfuse")
-    # 智能体模块独立模型配置(key/url/AGENT_MODEL) + 平台基础环境 + langfuse
-    env = _module_env("agent")
-    for k, v in _read_env_pairs(LANGFUSE_ENV).items():
-        if k.startswith("LANGFUSE"):
-            env[k] = v
-    logf = open(AGENT_DIR / "server.log", "a", encoding="utf-8")
-    flags = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
-    subprocess.Popen(
-        [str(venv_py), "server.py"],
-        cwd=str(AGENT_DIR), stdout=logf, stderr=subprocess.STDOUT,
-        env=env, creationflags=flags,
-    )
-    return {"started": True}
-
-
-@app.post("/api/agent/restart")
-def agent_restart():
-    """重启智能体服务以应用新模型配置: 本地进程(杀掉重拉, 吃 ⚙️模块设置)或 Docker 容器(吃 .env)。"""
-    killed = False
-    for proc in psutil.process_iter(["pid", "cmdline"]):
-        try:
-            cmd = " ".join(str(c) for c in (proc.info["cmdline"] or []))
-            if "server.py" in cmd and str(AGENT_DIR) in cmd and proc.info["pid"] != os.getpid():
-                proc.terminate()
-                killed = True
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
-            continue
-    if killed:
-        import time
-        for _ in range(20):
-            if not _agent_up():
-                break
-            time.sleep(0.5)
-        venv_py = next((p for p in (AGENT_DIR / ".venv" / "bin" / "python",
-                                    AGENT_DIR / ".venv" / "Scripts" / "python.exe") if p.exists()), None)
-        if not venv_py:
-            raise HTTPException(404, "本地智能体 venv 不存在(安装提示见「启动服务」)")
-        env = _module_env("agent")
-        for k, v in _read_env_pairs(LANGFUSE_ENV).items():
-            if k.startswith("LANGFUSE"):
-                env[k] = v
-        logf = open(AGENT_DIR / "server.log", "a", encoding="utf-8")
-        flags = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
-        subprocess.Popen([str(venv_py), "server.py"], cwd=str(AGENT_DIR),
-                         stdout=logf, stderr=subprocess.STDOUT, env=env, creationflags=flags)
-        return {"started": True, "mode": "local"}
-    if _docker_restart_agent():
-        return {"started": True, "mode": "docker"}
-    if _agent_up():
-        raise HTTPException(409, "服务在线但既无本地进程也无 docker.sock, 无法自动重启"
-                                 "(Docker 部署确认 compose 已挂载 /var/run/docker.sock)")
-    raise HTTPException(404, "智能体未运行: 先点「启动服务」")
+@app.post("/api/agent/config")
+async def agent_config(req: Request):
+    """保存被测智能体服务地址 (module_config.json → agent.url, 立即生效)。"""
+    try:
+        body = await req.json()
+    except Exception:  # noqa: BLE001
+        raise HTTPException(400, "请求体错误")
+    url = str(body.get("url") or "").strip().rstrip("/")
+    if not url.startswith(("http://", "https://")):
+        raise HTTPException(400, "url 须以 http:// 或 https:// 开头")
+    cfg = _load_module_cfg()
+    cfg.setdefault("agent", {})["url"] = url
+    MODULE_CFG_PATH.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+    return {"saved": True, "url": url}
 
 
 @app.api_route("/api/agent/proxy/{path:path}", methods=["GET", "POST"])
 async def agent_proxy(path: str, request: Request):
-    """转发到智能体服务 (chat/files/file/tasks/run_task)。"""
+    """转发到被测智能体服务 (run/chat/files/file, 契约见接入指南)。"""
     body = await request.body()
     try:
-        r = httpx.request(request.method, f"{AGENT_SVC}/{path}", content=body,
+        r = httpx.request(request.method, f"{_agent_svc()}/{path}", content=body,
                           headers={"Content-Type": "application/json"}, timeout=300)
         return JSONResponse(r.json(), status_code=r.status_code)
     except httpx.ConnectError:
-        raise HTTPException(502, "智能体服务未启动, 请先点『启动服务』")
+        raise HTTPException(502, "被测智能体服务不在线: 先按「接入指南」启动你的智能体, 再点「检测接入」")
     except json.JSONDecodeError:
-        raise HTTPException(502, "智能体服务返回异常")
+        raise HTTPException(502, "被测智能体服务返回异常(非 JSON)")
 
 
 # ---------- M3: 智能体轨迹 + DeepEval 双口径指标 ----------
@@ -731,15 +676,18 @@ def agent_trajs():
 
 @app.post("/api/agent/generate")
 def agent_generate():
-    """拉起智能体跑全部任务 → 生成轨迹 (run_tasks.py 逐题调智能体服务并采集终态证据)。"""
+    """拉起被测智能体跑全部任务 → 生成轨迹 (run_tasks.py 逐题 POST /run 并采集终态证据)。"""
     if _tracked_running(AGE_PID, "run_tasks.py"):
         raise HTTPException(409, "轨迹生成已在运行中")
     if not _agent_up():
-        raise HTTPException(409, "智能体服务未启动, 请先点「启动服务」")
+        raise HTTPException(409, "被测智能体不在线: 先按「接入指南」启动你的智能体, 再点「检测接入」")
     if not (AGENTEVAL_DIR / "run_tasks.py").exists():
         raise HTTPException(404, f"引擎不存在: {AGENTEVAL_DIR}")
+    env = _module_env("agent")
+    env["AGENT_SVC_URL"] = _agent_svc()
+    env["AGENT_TASKS_FILE"] = str(AGENT_TASKS_FILE)
     _spawn([sys.executable, "run_tasks.py"], AGENTEVAL_DIR,
-           RUNS_DIR / "agent_generate.log", pid_file=AGE_PID)
+           RUNS_DIR / "agent_generate.log", env=env, pid_file=AGE_PID)
     return {"started": True}
 
 
@@ -801,8 +749,8 @@ def agent_chatscores():
         return {"exists": False, "running": running}
 
 
-# ---------- 任务集管理 (agents/mingzhu-agent/tasks.jsonl 在线 CRUD + AI 合成 → 待审 → 采纳) ----------
-AGENT_TASKS_FILE = AGENT_DIR / "tasks.jsonl"
+# ---------- 任务集管理 (engines/deepeval/tasks/default.jsonl 在线 CRUD + AI 合成 → 待审 → 采纳) ----------
+AGENT_TASKS_FILE = AGENTEVAL_DIR / "tasks" / "default.jsonl"
 TASK_SYNTH_PENDING = AGENTEVAL_RUNS / "tasks_synth.jsonl"
 TASK_SYNTH_PID = BASE_DIR / "runs" / "agent_tasksynth.pid"
 TASK_SEEDS_FILE = AGENTEVAL_DIR / "task_seeds.md"
@@ -810,13 +758,14 @@ TASK_SEEDS_FILE = AGENTEVAL_DIR / "task_seeds.md"
 
 @app.get("/api/agent/tasks")
 def agent_tasks_list():
-    """任务集(直接读文件, 服务未启动也能管理) + 种子文件状态."""
+    """任务集(平台侧文件, 直接读) + 种子文件状态."""
     return {"tasks": read_jsonl(AGENT_TASKS_FILE), "seeds": TASK_SEEDS_FILE.exists()}
 
 
 @app.post("/api/agent/tasks")
 async def agent_task_add(req: Request):
-    """手动添加任务 {instruction, expect_tools[], expect_answer_contains?[], expect_file?, expect_memory_contains?}."""
+    """手动添加任务 {instruction, expect_tools[], expect_answer_contains?[], expect_file?,
+    expect_file_contains?{file,text}}."""
     try:
         body = await req.json()
     except Exception:  # noqa: BLE001
@@ -831,10 +780,12 @@ async def agent_task_add(req: Request):
     kws = [str(x).strip() for x in (body.get("expect_answer_contains") or []) if str(x).strip()]
     if kws:
         row["expect_answer_contains"] = kws
-    for k in ("expect_file", "expect_memory_contains"):
-        v = str(body.get(k) or "").strip()
-        if v:
-            row[k] = v
+    v = str(body.get("expect_file") or "").strip()
+    if v:
+        row["expect_file"] = v
+    fc = body.get("expect_file_contains") or {}
+    if isinstance(fc, dict) and str(fc.get("file") or "").strip() and str(fc.get("text") or "").strip():
+        row["expect_file_contains"] = {"file": str(fc["file"]).strip(), "text": str(fc["text"]).strip()}
     cur.append(row)
     _write_jsonl(AGENT_TASKS_FILE, cur)
     return {"id": new_id, "total": len(cur)}
@@ -871,6 +822,7 @@ async def agent_task_synth(req: Request):
     ag_cfg = _load_module_cfg().get("agent") or {}
     if ag_cfg.get("model"):
         env["OPENAI_MODEL"] = ag_cfg["model"]
+    env["AGENT_TASKS_FILE"] = str(AGENT_TASKS_FILE)
     _spawn([sys.executable, str(script), str(size)], AGENTEVAL_DIR,
            RUNS_DIR / "agent_tasksynth.log", env=env, pid_file=TASK_SYNTH_PID)
     return {"started": True, "size": size}
@@ -905,9 +857,11 @@ async def agent_task_synth_adopt(req: Request):
         row = {"id": next_id, "instruction": p["instruction"], "expect_tools": p["expect_tools"]}
         if p.get("expect_answer_contains"):
             row["expect_answer_contains"] = p["expect_answer_contains"]
-        for k in ("expect_file", "expect_memory_contains"):
-            if p.get(k):
-                row[k] = p[k]
+        if p.get("expect_file"):
+            row["expect_file"] = p["expect_file"]
+        fc = p.get("expect_file_contains")
+        if isinstance(fc, dict) and fc.get("file") and fc.get("text"):
+            row["expect_file_contains"] = fc
         cur.append(row)
     _write_jsonl(AGENT_TASKS_FILE, cur)
     rest = [p for p in pending if p not in adopted]
@@ -929,7 +883,7 @@ async def agent_task_synth_discard(req: Request):
     return {"discarded": len(pending) - len(rest), "pending": len(rest)}
 
 
-# ---------- M3·线A: 智能体基准 (Harbor + Terminus-2, 基准矩阵) ----------
+# ---------- 通用智能体测评: 智能体基准 (Harbor + Terminus-2, 基准矩阵) ----------
 @app.post("/api/tbench/run")
 async def tbench_run(req: Request):
     """拉起基准跑批: {bench?: key, model: 登记名, limit?: int, include?: str, oracle?: bool}。"""
@@ -1105,7 +1059,7 @@ def tbench_progress(job: str | None = None):
     return out
 
 
-# ---------- 线A·实时演示: 终端直播/回放(cast) + 轨迹面板(trajectory) + harbor view ----------
+# ---------- 通用智能体测评·实时演示: 终端直播/回放(cast) + 轨迹面板(trajectory) + harbor view ----------
 # 录像是 Terminus-2 的 record_terminal_session 能力(容器内 asciinema rec 增量写盘),
 # 轨迹是 agent 基类的 ATIF 契约(每步整体重写) → 平台只做零侵入读取, 与数据集无关。
 TB_SAFE_NAME = re.compile(r"^[A-Za-z0-9._\-]+$")
@@ -1905,6 +1859,9 @@ OWN_QUESTIONS = ENGINES_DIR / "opencompass" / "data" / "own" / "own.jsonl"
 OWN_SYNTH_PENDING = ENGINES_DIR / "opencompass" / "data" / "own_synth.jsonl"
 OWN_SYNTH_PID = RUNS_DIR / "llm_synth.pid"
 OWN_SEEDS_DIR = ENGINES_DIR / "opencompass" / "data" / "own_seeds"
+OWN_SEED_EXTENSIONS = {".txt", ".md"}
+OWN_SEED_MAX_BYTES = 10 * 1024 * 1024
+OWN_SEED_NAME = re.compile(r"^[^<>:\"/\\|?*\x00-\x1f]+$")
 
 
 def _write_jsonl(path: Path, rows: list):
@@ -1917,9 +1874,71 @@ def _write_jsonl(path: Path, rows: list):
 @app.get("/api/llm/bench-questions")
 def own_questions():
     """自有题库(正式) + 种子语料状态."""
-    seeds = sorted(p.name for p in OWN_SEEDS_DIR.glob("*")
-                   if p.suffix.lower() in (".txt", ".md")) if OWN_SEEDS_DIR.exists() else []
-    return {"questions": read_jsonl(OWN_QUESTIONS), "seeds": seeds}
+    seed_files = []
+    if OWN_SEEDS_DIR.exists():
+        for p in sorted(OWN_SEEDS_DIR.iterdir(), key=lambda x: x.name.lower()):
+            if p.is_file() and p.suffix.lower() in OWN_SEED_EXTENSIONS:
+                try:
+                    seed_files.append({"name": p.name, "size": p.stat().st_size,
+                                       "mtime": datetime.fromtimestamp(p.stat().st_mtime).strftime("%Y-%m-%d %H:%M")})
+                except OSError:
+                    continue
+    return {"questions": read_jsonl(OWN_QUESTIONS),
+            "seeds": [x["name"] for x in seed_files], "seed_files": seed_files}
+
+
+@app.post("/api/llm/own-seeds")
+async def own_seed_upload(file: UploadFile = File(...)):
+    """上传自有题库生成素材, 只允许 UTF-8 的 .txt/.md 文件写入固定目录."""
+    raw_name = str(file.filename or "").strip()
+    name = Path(raw_name).name
+    suffix = Path(name).suffix.lower()
+    if not raw_name or name != raw_name or suffix not in OWN_SEED_EXTENSIONS or not OWN_SEED_NAME.fullmatch(name):
+        raise HTTPException(400, "只支持文件名安全的 .txt 或 .md 文件")
+    data = await file.read(OWN_SEED_MAX_BYTES + 1)
+    if len(data) > OWN_SEED_MAX_BYTES:
+        raise HTTPException(413, "文件不能超过 10 MB")
+    try:
+        data.decode("utf-8")
+    except UnicodeDecodeError:
+        raise HTTPException(400, "文件必须使用 UTF-8 编码")
+    if not data.strip():
+        raise HTTPException(400, "文件内容不能为空")
+    OWN_SEEDS_DIR.mkdir(parents=True, exist_ok=True)
+    target = OWN_SEEDS_DIR / name
+    tmp_name = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="wb", dir=OWN_SEEDS_DIR, prefix=".upload-", suffix=".tmp", delete=False) as tmp:
+            tmp_name = tmp.name
+            tmp.write(data)
+            tmp.flush()
+            os.fsync(tmp.fileno())
+        os.replace(tmp_name, target)
+    except OSError as e:
+        if tmp_name:
+            Path(tmp_name).unlink(missing_ok=True)
+        raise HTTPException(500, f"保存素材失败: {e}")
+    return {"uploaded": True, "name": name, "size": len(data)}
+
+
+@app.delete("/api/llm/own-seeds")
+def own_seed_delete(name: str):
+    """删除固定 own_seeds 目录下的单个 .txt/.md 素材."""
+    safe_name = Path(str(name or "")).name
+    if str(name or "") != safe_name or not OWN_SEED_NAME.fullmatch(safe_name) or Path(safe_name).suffix.lower() not in OWN_SEED_EXTENSIONS:
+        raise HTTPException(400, "非法素材文件名")
+    target = (OWN_SEEDS_DIR / safe_name).resolve()
+    try:
+        target.relative_to(OWN_SEEDS_DIR.resolve())
+    except ValueError:
+        raise HTTPException(400, "非法素材路径")
+    if not target.is_file():
+        raise HTTPException(404, f"素材不存在: {safe_name}")
+    try:
+        target.unlink()
+    except OSError as e:
+        raise HTTPException(500, f"删除素材失败: {e}")
+    return {"deleted": safe_name}
 
 
 @app.post("/api/llm/bench-questions")
@@ -1962,6 +1981,20 @@ async def own_synth(req: Request):
     except Exception:  # noqa: BLE001
         body = {}
     size = int(body.get("size") or 10)
+    selected_files = body.get("files")
+    if selected_files is not None:
+        if not isinstance(selected_files, list) or not selected_files:
+            raise HTTPException(400, "files 须为非空文件名数组")
+        clean_files = []
+        for raw in selected_files:
+            name = str(raw or "")
+            if (name != Path(name).name or not OWN_SEED_NAME.fullmatch(name)
+                    or Path(name).suffix.lower() not in OWN_SEED_EXTENSIONS):
+                raise HTTPException(400, f"非法素材文件名: {name}")
+            if not (OWN_SEEDS_DIR / name).is_file():
+                raise HTTPException(404, f"素材不存在: {name}")
+            clean_files.append(name)
+        selected_files = list(dict.fromkeys(clean_files))
     script = ENGINES_DIR / "opencompass" / "synth_bench.py"
     if not script.exists():
         raise HTTPException(404, f"未找到 {script}")
@@ -1972,7 +2005,10 @@ async def own_synth(req: Request):
     if llm_cfg.get("model"):
         env["OPENAI_MODEL"] = llm_cfg["model"]
     # synth_bench.py 只依赖 httpx, 用平台解释器拉起(opencompass venv 不在也能合成)
-    _spawn([sys.executable, str(script), str(size)], ENGINES_DIR / "opencompass",
+    cmd = [sys.executable, str(script), str(size)]
+    if selected_files:
+        cmd += ["--files", *selected_files]
+    _spawn(cmd, ENGINES_DIR / "opencompass",
            RUNS_DIR / "llm_synth.log", env=env, pid_file=OWN_SYNTH_PID)
     return {"started": True, "size": size}
 
@@ -2172,7 +2208,7 @@ def redteam_scan():
     if not PROMPTFOO_CMD.exists():
         raise HTTPException(404, "promptfoo 未安装")
     if not _agent_up():
-        raise HTTPException(502, "靶机(智能体服务)未启动, 请先在智能体页签启动服务")
+        raise HTTPException(502, "靶机(被测智能体)不在线: 先按智能体页「接入指南」启动你的智能体并检测接入")
     cases = _load_rt_cases()
     if not cases:
         raise HTTPException(404, "没有攻击用例 (engines/promptfoo/cases.json)")
@@ -2186,9 +2222,9 @@ def redteam_scan():
         return json.dumps(str(s), ensure_ascii=False)
 
     tpl = ["# 自动生成: cases.json → dyn yaml (勿手改)",
-           "description: " + y(f"红队扫描 · 四大名著智能体 ({len(cases)} 用例)"),
+           "description: " + y(f"红队扫描 · 自定义智能体 ({len(cases)} 用例)"),
            "targets:", "  - id: http", "    config:",
-           "      url: " + y(f"{AGENT_SVC}/chat"),
+           "      url: " + y(f"{_agent_svc()}/chat"),
            "      method: POST", "      headers:", "        Content-Type: application/json",
            "      body:", "        message: \"{{prompt}}\"",
            "      transformResponse: json.reply",
@@ -2274,8 +2310,9 @@ MODULES = [
     {"id": "ragas", "name": "ragas", "dim": "RAG 端到端质量", "ms": "M1",
      "ok": (RAGAS_DIR / "scripts" / "evaluate.py").exists()},
     {"id": "opencompass", "name": "OpenCompass", "dim": "模型能力基准", "ms": "M2", "ok": OC_VENV_PY.exists()},
-    {"id": "deepeval", "name": "DeepEval", "dim": "智能体轨迹质量(双口径)", "ms": "M3", "ok": AGENTEVAL_VENV_PY.exists()},
-    {"id": "langfuse", "name": "Langfuse", "dim": "轨迹采集 · 生产监控", "ms": "M3", "ok": False},
+    {"id": "tbench", "name": "Harbor 基准", "dim": "通用智能体测评", "ms": "M3", "ok": TBENCH_HARBOR.exists()},
+    {"id": "deepeval", "name": "DeepEval", "dim": "自定义智能体测评 · 评分", "ms": "M3", "ok": AGENTEVAL_VENV_PY.exists()},
+    {"id": "langfuse", "name": "Langfuse", "dim": "自定义智能体测评 · 轨迹采集", "ms": "M3", "ok": False},
     {"id": "promptfoo", "name": "promptfoo", "dim": "安全红队", "ms": "M4", "ok": PROMPTFOO_CMD.exists()},
 ]
 
@@ -2329,8 +2366,8 @@ def _json_history_item(module: str, p: Path) -> dict:
         s = d.get("summary") or {}
         tc = s.get("tool_correctness", s.get("tool_call_accuracy"))
         go = s.get("task_completion", s.get("goal_accuracy"))
-        return {"id": p.stem, "ts": d.get("ts", p.stem), "title": f"智能体 {d.get('n', '?')} 任务",
-                "chips": {"引擎": d.get("engine", "ragas"), "裁判": d.get("judge", "?"),
+        return {"id": p.stem, "ts": d.get("ts", p.stem), "title": f"自定义智能体 {d.get('n', '?')} 任务",
+                "chips": {"引擎": d.get("engine", "deepeval"), "裁判": d.get("judge", "?"),
                           "轨迹": str(d.get("source", "?"))[:34]},
                 "summary": f"工具正确 {tc} · 完成 {go} · 召回 {s.get('tool_recall', '-')}",
                 "has_report": True}
@@ -2795,6 +2832,10 @@ def get_module_config():
                 "configured": bool(c.get("model") or c.get("base_url") or c.get("api_key")
                                    or c.get("judge_model")),
                 "fallback": fallback}
+        if m == "agent":
+            # agent 模块 = 被测智能体地址 + 裁判/合成模型(自定义智能体测评共用)
+            item["url"] = c.get("url", "")
+            item["fallback_url"] = AGENT_SVC_DEFAULT
         if m == "rag":
             item["judge_model"] = c.get("judge_model", "")
             # embedding/rerank 独立角色 (未配置时脚本回落 .env / 索引同源默认)
@@ -2823,15 +2864,17 @@ async def save_module_config(req: Request):
     cfg = _load_module_cfg()
     c = cfg.setdefault(m, {})
     keys = ("model", "base_url", "api_key", "judge_model")
+    if m == "agent":
+        keys += ("url",)
     if m == "rag":
         keys += ("embedding_model", "embedding_base_url", "embedding_api_key",
                  "rerank_model", "rerank_base_url", "rerank_api_key")
     for k in keys:
-        v = (body.get(k) or "").strip()
+        v = (body.get(k) or "").strip().rstrip("/")
         if v:
             c[k] = v
     MODULE_CFG_PATH.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
-    note = {"agent": "重启智能体服务(智能体页签『启动服务』)后生效",
+    note = {"agent": "已保存。被测智能体地址与裁判/合成模型配置立即生效",
             "rag": "下次检索(retrieve)与评测(evaluate)运行时生效"}.get(m, "下次运行时生效")
     return {"saved": True, "message": f"已保存。{note}"}
 

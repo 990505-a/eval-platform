@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
-"""智能体轨迹评分 (DeepEval 双口径): 最新轨迹 → agent_scores.json + 归档
+"""自定义智能体轨迹评分 (DeepEval 双口径): 最新轨迹 → agent_scores.json + 归档
 
-线B 评分引擎 (替代 ragas agent 指标, ragas 收缩回纯 RAG):
-  裁判式 (DeepEval GEval, 任意 OpenAI 兼容端点当裁判):
-    tool_correctness  实际工具调用 vs 期望工具集合 (多调/漏调都扣分)
+评分引擎 (Langfuse 记轨迹, DeepEval 打分 —— 官方推荐的分工):
+  裁判式 (DeepEval GEval, 任意 OpenAI 兼容端点当裁判, 见 judge.py):
+    tool_correctness  实际工具调用(含参数与顺序) vs 期望工具集合 (多调/漏调都扣分)
     task_completion   任务目标最终是否达成 (对照期望要点判 0-1)
   确定性核验 (本脚本自算, 不花 API):
-    tool_recall / answer_hit / file_hit / memory_hit (环境终态证据来自 run_tasks.py 采集)
+    tool_recall / answer_hit / file_hit / content_hit (环境终态证据来自 run_tasks.py 采集)
 
 产物契约 (与平台 app.py / 前端对齐):
     runs/agenteval/agent_scores.json          当前分数
@@ -21,42 +21,11 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-import httpx
+from judge import build_judge
 
-HERE = Path(__file__).resolve().parent
+HERE = Path(__file__).parent
 RUNS = HERE.parent.parent / "runs" / "agenteval"
 SELFTEST = "--selftest" in sys.argv
-
-
-# ---------- 裁判模型: 任意 OpenAI 兼容端点包装成 DeepEval 自定义模型 ----------
-def build_judge():
-    import os
-    from deepeval.models import DeepEvalBaseLLM
-
-    model = os.environ.get("AGENTEVAL_JUDGE_MODEL") or os.environ.get("OPENAI_MODEL") or "gpt-4o-mini"
-    base = (os.environ.get("OPENAI_BASE_URL") or "https://api.openai.com/v1").rstrip("/")
-    key = os.environ.get("OPENAI_API_KEY", "")
-    if not key:
-        raise SystemExit("裁判未配置: 缺 OPENAI_API_KEY (⚙️设置/模块设置-agent 或 .env)")
-
-    class JudgeLLM(DeepEvalBaseLLM):
-        def load_model(self):
-            return self
-
-        def get_model_name(self):
-            return model
-
-        def generate_text(self, prompt: str) -> str:
-            r = httpx.post(f"{base}/chat/completions",
-                           headers={"Authorization": f"Bearer {key}"},
-                           json={"model": model, "temperature": 0,
-                                 "messages": [{"role": "user", "content": prompt}]},
-                           timeout=180)
-            r.raise_for_status()
-            return r.json()["choices"][0]["message"]["content"]
-
-    print(f"[evaluate] 裁判: {model} @ {base}", flush=True)
-    return JudgeLLM(), model
 
 
 def _mean(xs):
@@ -67,20 +36,35 @@ def _mean(xs):
 def _det(traj: dict) -> dict:
     """确定性核验: 对照期望标注 + 环境终态证据, 不花 API。"""
     exp, called = traj["expect"], traj.get("pred_tools") or []
-    out = {"tool_recall": None, "answer_hit": None, "file_hit": None, "memory_hit": None}
-    if exp["tools"]:
+    out = {"tool_recall": None, "answer_hit": None, "file_hit": None, "content_hit": None}
+    if exp.get("tools"):
         hit = {t for t in exp["tools"] if t in called}
         out["tool_recall"] = round(len(hit) / len(set(exp["tools"])), 3)
-    if exp["answer_contains"]:
+    if exp.get("answer_contains"):
         reply = traj.get("reply") or ""
         out["answer_hit"] = round(sum(1 for kw in exp["answer_contains"] if kw in reply)
                                   / len(exp["answer_contains"]), 3)
-    if exp["file"]:
-        files = traj.get("files") or []
-        out["file_hit"] = any(exp["file"] in f for f in files)
-    if exp["memory_contains"]:
-        out["memory_hit"] = exp["memory_contains"] in (traj.get("memory") or "")
+    if exp.get("file"):
+        out["file_hit"] = any(exp["file"] in f for f in traj.get("files") or [])
+    # 内容核验: expect_file_contains{file,text}; 旧轨迹的 memory 字段/memory_contains 兼容
+    fc = exp.get("file_contains")
+    if fc:
+        ev = ((traj.get("file_evidence") or {}).get(fc["file"])
+              if isinstance(fc, dict) else None)
+        out["content_hit"] = bool(fc.get("text")) and str(fc["text"]) in (ev or "")
+    elif exp.get("memory_contains"):
+        ev = ((traj.get("file_evidence") or {}).get("memory/long_term_memory.md")
+              or traj.get("memory") or "")
+        out["content_hit"] = str(exp["memory_contains"]) in ev
     return out
+
+
+def _calls_text(traj: dict) -> str:
+    """带参数、按序的工具调用序列(喂给裁判的完整过程信息)。"""
+    calls = traj.get("tool_calls") or []
+    if not calls:
+        return "无"
+    return " → ".join(f"{c.get('name', '?')}({str(c.get('args', ''))[:80]})" for c in calls)
 
 
 def _judge(traj: dict, judge) -> dict:
@@ -89,26 +73,30 @@ def _judge(traj: dict, judge) -> dict:
     from deepeval.test_case import LLMTestCase, LLMTestCaseParams
 
     exp = traj["expect"]
-    called = traj.get("pred_tools") or []
+    det = traj.get("_det") or {}
     expect_notes = []
-    if exp["answer_contains"]:
+    if exp.get("answer_contains"):
         expect_notes.append(f"回答需包含: {exp['answer_contains']}")
-    if exp["file"]:
+    if exp.get("file"):
         expect_notes.append(f"需产出文件: {exp['file']}")
-    if exp["memory_contains"]:
+    if exp.get("file_contains"):
+        expect_notes.append(f"文件 {exp['file_contains'].get('file')} 需包含: {exp['file_contains'].get('text')}")
+    if exp.get("memory_contains"):
         expect_notes.append(f"需写入长期记忆: {exp['memory_contains']}")
     evidence = (f"最终回答: {traj.get('reply') or '(空)'}\n"
                 f"工作区文件: {traj.get('files') or '无'}\n"
-                f"长期记忆末尾: {(traj.get('memory') or '无')[-200:]}")
+                f"文件内容证据: {traj.get('file_evidence') or '无'}\n"
+                f"执行异常: {traj.get('error') or '无'}")
     out = {}
     cases = {
         "tool_correctness": (
-            f"任务的期望工具集合: {exp['tools'] or '(无标注)'}。"
-            "判断实际调用的工具是否恰当: 该用的用了没有、有没有调用与任务无关的多余工具。"
-            "完全正确=1, 漏调或多调明显不当≈0.5, 完全不对=0。只评工具名与必要性, 不评参数。",
-            f"实际调用: {called or '无'}"),
+            f"任务的期望工具集合: {exp.get('tools') or '(无标注)'}。"
+            "下面是智能体按顺序实际发起的工具调用(含参数摘要), 判断工具选择是否恰当: "
+            "该用的用了没有、顺序合理吗、有没有与任务无关的多余调用。"
+            "完全正确=1, 漏调或明显多调不当≈0.5, 完全不对=0。",
+            f"实际调用序列: {_calls_text(traj)}"),
         "task_completion": (
-            f"任务指令: {traj['instruction']}\n期望要点: {'; '.join(expect_notes) or '按指令判断'}。"
+            f"任务指令: {traj['instruction']}\n期望要点: {'; '.join(expect_notes) or '按指令判断'}。\n"
             "综合最终回答与工作区证据, 判断任务目标是否达成。完全达成=1, 部分达成≈0.5, 未达成=0。",
             evidence),
     }
@@ -125,27 +113,33 @@ def _judge(traj: dict, judge) -> dict:
 def main():
     trajs_files = sorted(RUNS.glob("trajectories-*.jsonl"), reverse=True)
     if not trajs_files:
-        raise SystemExit("没有轨迹: 先跑 run_tasks.py (平台「生成轨迹」)")
+        raise SystemExit("没有轨迹: 先跑 run_tasks.py (平台「一键评测」)")
     src = trajs_files[0]
     trajs = [json.loads(l) for l in src.read_text(encoding="utf-8").splitlines() if l.strip()]
     print(f"[evaluate] 评分 {len(trajs)} 题 · 来源 {src.name} · "
           f"{'selftest(裁判跳过)' if SELFTEST else 'DeepEval 裁判'}", flush=True)
 
     judge = None
+    judge_name = "selftest"
     if not SELFTEST:
-        judge, judge_name = build_judge()
-    else:
-        judge_name = "selftest"
+        try:
+            judge, judge_name = build_judge()
+        except SystemExit as e:  # 无裁判 key → 降级为仅确定性核验, 不中断
+            print(f"[evaluate] {e}\n[evaluate] → 本轮跳过裁判, 仅算确定性核验"
+                  "(tool_recall/answer_hit/file_hit/content_hit), 裁判项记 None", flush=True)
+            judge_name = "no-key(仅确定性核验)"
 
     per_task = []
     for t in trajs:
+        det = _det(t)
         row = {"task_id": t["id"], "instruction": t["instruction"],
-               "pred_tools": t.get("pred_tools"), "expect_tools": t["expect"]["tools"],
-               "latency_s": t.get("latency_s"), **_det(t)}
-        if SELFTEST:
+               "pred_tools": t.get("pred_tools"), "expect_tools": t["expect"].get("tools"),
+               "latency_s": t.get("latency_s"), "error": t.get("error"), **det}
+        if SELFTEST or judge is None:
             row.update({"tool_correctness": None, "task_completion": None})
         else:
             try:
+                t["_det"] = det
                 row.update(_judge(t, judge))
             except Exception as e:  # noqa: BLE001  # 裁判单题失败不中断
                 print(f"[evaluate]   任务{t['id']} 裁判失败: {e}", flush=True)
@@ -154,7 +148,7 @@ def main():
 
     summary = {k: _mean([r.get(k) for r in per_task])
                for k in ("tool_correctness", "task_completion",
-                         "tool_recall", "answer_hit", "file_hit", "memory_hit")}
+                         "tool_recall", "answer_hit", "file_hit", "content_hit")}
     scores = {
         "engine": "deepeval", "judge": judge_name, "ts": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "n": len(per_task), "source": src.name, "summary": summary,

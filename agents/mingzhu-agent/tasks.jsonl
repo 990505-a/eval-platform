@@ -1,6 +1,0 @@
-{"id": 1, "instruction": "检索'贾宝玉'的相关原文, 并在回答中引用一句原文。", "expect_tools": ["search_classics"], "expect_answer_contains": ["贾宝玉"]}
-{"id": 2, "instruction": "调查'桃园结义'的情节, 把调查结论写入工作区文件 桃园结义报告.md。", "expect_tools": ["search_classics", "write_file"], "expect_answer_contains": ["桃园"], "expect_file": "桃园结义报告.md"}
-{"id": 3, "instruction": "把'用户偏好简洁回答'这条偏好写入你的长期记忆。", "expect_tools": ["remember"], "expect_memory_contains": "简洁"}
-{"id": 4, "instruction": "检索莎士比亚《哈姆雷特》的经典台词, 在回答中引用一句并注明出处。", "expect_tools": ["search_classics"], "expect_answer_contains": ["哈姆雷特"]}
-{"id": 5, "instruction": "检索'孙悟空'在西游记中的高光情节, 整理后写入工作区文件 孙悟空高光.md。", "expect_tools": ["search_classics", "write_file"], "expect_answer_contains": ["孙悟空"], "expect_file": "孙悟空高光.md"}
-{"id": 6, "instruction": "检索'林黛玉葬花'的原文情节, 并在回答中引用一句葬花词。", "expect_tools": ["search_classics"], "expect_answer_contains": ["林黛玉"]}

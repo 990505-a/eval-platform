@@ -22,13 +22,14 @@
 
 ```
 python -m venv .venv-agenteval
-.venv-agenteval/bin/pip install -r engines/deepeval/requirements.txt   # Windows 为 Scripts\pip
+.venv-agenteval/bin/pip install -r engines/deepeval/requirements.txt   # Windows 为 Scripts/pip
 ```
 
-裁判模型: ⚙️设置/模块设置-agent 的模型与密钥(未配置时回退平台 `.env` 的 OPENAI_*)。
-被测智能体: `agents/mingzhu-agent`(:8820, 任务集 `tasks.jsonl` 由其自带)。
+裁判模型：设置页或 `module_config.json` 的 agent 模块配置；未配置时回退平台 `.env` 的 `OPENAI_*`。
+被测智能体：用户自己启动的外部 HTTP 服务，平台“智能体”页面负责保存地址和检测接入。
 
 ## 自测(零 API 费用)
+
 
 ```
 .venv-agenteval/bin/python engines/deepeval/run_tasks.py --selftest   # 合成轨迹

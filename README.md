@@ -8,8 +8,8 @@
 |---|---|
 | **ragas** | RAG 端到端质量(忠实度/相关性/检索指标 33 项) |
 | **OpenCompass** | 模型能力基准,六基准本地化 + 限题控费 |
-| **DeepEval** | 智能体轨迹质量(线B):ToolCorrectness/TaskCompletion 裁判 + 确定性核验 |
-| **Harbor** | 智能体任务完成度基准(线A):TB 2.0/2.1/Pro · τ³-bench · GAIA · SWE-bench Verified,容器内测试判分 |
+| **DeepEval** | 自定义智能体测评(第②部分):接入你自己的智能体 → ToolCorrectness/TaskCompletion 裁判 + 确定性核验 |
+| **Harbor** | 通用智能体测评(第①部分):TB 2.0/2.1/Pro · τ³-bench · GAIA · SWE-bench Verified,容器内测试判分,分数对标公开榜 |
 | **Langfuse** | 智能体轨迹采集 + 云端/本地监控 |
 | **promptfoo** | 安全红队 + 攻击用例在线配置 |
 
@@ -22,28 +22,29 @@
 
 ## 功能
 
-- 📊 总览:五引擎接入状态 + 评测历史与趋势图(题级实时进度)
-- 📚 RAG 测评:13 种检索模式对比 / 逐题明细 / 数据集与题集管理 / 评测报告
-- 🎓 LLM 基准:模型登记(任意 OpenAI 兼容端点 + 思考强度五档)/ 成绩矩阵 / 学科雷达 / 运行历史
-- 🤖 智能体测评:线A 基准矩阵(TB 2.0/2.1/Pro · τ³ · GAIA · SWE-bench Verified,Harbor+Terminus-2 与公开榜同口径)/ 线B DeepEval 双口径 + Langfuse 轨迹与抽样评分
-- 🛡️ 安全红队:promptfoo 攻击扫描 / 用例在线 CRUD / 漏洞清单
-- 📖 指标词典:33 项指标的计算方法/输入依赖/方向/踩坑记录,前端悬浮可查
-- 🧩 自有评测集:LLM 自有题库(bench `own`:手动添加 / 种子语料 AI 合成→待审→采纳,成绩进矩阵)
-  · 智能体任务集在线管理与 AI 合成(task_seeds.md 换项目即换题)· tbench 自定义数据集(本地任务目录 harbor -p / registry 名)
+- 📊 总览：模块状态、运行进度和最近记录
+- 📚 RAG：选择后端、重新检索、运行评测、管理题集和查看答卷
+- 🎓 LLM：登记模型、预检、运行基准和查看结果
+- 🤖 智能体：接入外部服务、维护任务、生成轨迹和运行评测
+- 🛡️ 红队：维护攻击用例、发起扫描和查看漏洞结果
+- 🧩 自有评测集：LLM 自有题库、智能体任务集和 Harbor 自定义任务
 
 ## 快速开始
 
 ```bash
-pip install fastapi uvicorn httpx psutil   # 平台本体
-python app.py                               # http://127.0.0.1:8800
+pip install fastapi uvicorn httpx psutil python-multipart   # 平台本体
+python app.py                                             # http://127.0.0.1:8800
 ```
 
-LLM 基准模块需另装 OpenCompass venv、RAG 模块依赖 `D:\job\rag-eval` 数据源,
-完整步骤见 [DEPLOY.md](DEPLOY.md),总体设计见 [PLAN.md](PLAN.md)。
+LLM 基准模块需另装 OpenCompass venv，RAG 模块可使用内置双后端胶水层；完整步骤见 [DEPLOY.md](DEPLOY.md)。
+
+操作指引统一通过 `eval-platform-guide` Skill 提供（智能体页“接入”面板有下载入口），安装到支持的 AI 客户端后，可让 AI 按本项目事实指导部署、配置、运行和排障。直接资源地址：`/static/skill/eval-platform-guide/SKILL.md`。
+
+LLM 页面的“自有题库”支持直接上传 `.txt/.md` 业务资料，上传后可勾选一个或多个素材，点击“生成选中”或“生成全部”出题；素材会保存到 `engines/opencompass/data/own_seeds/`，无需手动复制文件。
 
 ## 约定
 
-- 引擎产物一律落"目录 + 标准文件名",平台零侵入聚合(`runs/` 下,不入库)
-- 后台任务:子进程 + 日志文件 + 平台侧进程检测,防重复启动
-- 前端单文件无构建(static/index.html),ECharts CDN
-- 密钥不入库:`.env` / `module_config.json` / `runs/llm/models.json` 均在 .gitignore 中,模板见 `*.example`
+- 引擎产物一律落“目录 + 标准文件名”，平台负责编排和聚合（`runs/` 为运行产物）
+- 后台任务：子进程 + 日志文件 + 平台侧进程检测，防重复启动
+- 前端为单文件静态页面，无构建步骤
+- 密钥不入库：`.env` / `module_config.json` / `runs/llm/models.json` 均在 `.gitignore` 中，模板见 `*.example`

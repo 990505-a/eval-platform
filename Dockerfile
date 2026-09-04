@@ -20,7 +20,7 @@ WORKDIR /app
 ENV PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
 
 # 平台本体运行时依赖 (app.py)
-RUN pip install --no-cache-dir fastapi uvicorn httpx psutil
+RUN pip install --no-cache-dir fastapi uvicorn httpx psutil python-multipart
 
 # LLM 基准模块: opencompass 独立 venv (对齐 DEPLOY.md 的 .venv-opencompass 布局)
 RUN python -m venv .venv-opencompass \
